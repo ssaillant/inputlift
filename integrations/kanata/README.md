@@ -41,6 +41,23 @@ the virtual-key commands or proof of physical keyboard behavior.
 
 ## Live recovered-control input
 
+For an explicitly reviewed fresh physical-source installation, follow the
+[event-only setup guide](../../docs/integrations/kanata.md#fresh-physical-source-setup-for-developers).
+Do not use the Deskflow/default installation mode for this path.
+
+From normal-user PowerShell in the checkout, inspect the current protected state
+without starting anything, then explicitly connect if ready:
+
+```powershell
+./integrations/kanata/Start-Bridge.ps1
+./integrations/kanata/Start-Bridge.ps1 -Connect
+```
+
+The launcher rejects stale/wrong-mode state and prints no session or device
+identifiers. Inspection opens no socket, starts no process, and changes no
+settings. It does not start or install the privileged source. The native
+companion still authenticates the pipe server after connection.
+
 `--bridge` connects read-only to the event-only capture session's named pipe:
 
 ```powershell

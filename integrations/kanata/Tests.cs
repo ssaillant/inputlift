@@ -123,6 +123,7 @@ namespace InputLift.Kanata
             private readonly List<TcpClient> connections = new List<TcpClient>();
             private readonly List<Thread> handlers = new List<Thread>();
             internal readonly List<string> Actions = new List<string>();
+            private readonly List<string> firstConnectionActions = new List<string>();
             internal int Port;
             internal string Failure;
             private readonly bool includeKey, errorOnPress;
@@ -141,7 +142,9 @@ namespace InputLift.Kanata
                     {
                         TcpClient connected = listener.AcceptTcpClient();
                         connected.ReceiveTimeout = 6000; connected.SendTimeout = 1000;
-                        Thread handler = new Thread(delegate() { Serve(connected); }); handler.IsBackground = true;
+                        bool firstConnection;
+                        lock (connections) firstConnection = connections.Count == 0;
+                        Thread handler = new Thread(delegate() { Serve(connected, firstConnection); }); handler.IsBackground = true;
                         lock (connections) { connections.Add(connected); handlers.Add(handler); }
                         handler.Start();
                     }
@@ -150,7 +153,7 @@ namespace InputLift.Kanata
                 catch (ObjectDisposedException) { }
                 catch (Exception error) { Failure = error.GetType().Name + ": " + error.Message; }
             }
-            private void Serve(TcpClient connected)
+            private void Serve(TcpClient connected, bool firstConnection)
             {
                 try
                 {
@@ -171,7 +174,7 @@ namespace InputLift.Kanata
                                 Assert((string)body["name"] == "inputlift-fn", "Wrong virtual key on wire.");
                                 string action = (string)body["action"];
                                 Assert(action == "Press" || action == "Release", "Wrong action on wire.");
-                                lock (Actions) Actions.Add(action);
+                                lock (Actions) { Actions.Add(action); if (firstConnection) firstConnectionActions.Add(action); }
                                 if (errorOnPress && action == "Press") writer.WriteLine("{\"Error\":{\"msg\":\"simulated action error\"}}");
                             }
                         }
@@ -180,6 +183,7 @@ namespace InputLift.Kanata
                 catch (Exception error) { if (!(error is SocketException) && !(error is IOException)) Failure = error.GetType().Name + ": " + error.Message; }
             }
             internal string[] ActionSnapshot() { lock (Actions) return Actions.ToArray(); }
+            internal string[] FirstConnectionSnapshot() { lock (Actions) return firstConnectionActions.ToArray(); }
             public void Dispose()
             {
                 listener.Stop(); server.Join(1500);
@@ -251,6 +255,21 @@ namespace InputLift.Kanata
                     string[] actions = stub.ActionSnapshot();
                     Assert(result.status == "error" && result.ownedChildStopped && !result.ownedChildTerminated && result.finalReleaseSent &&
                         Array.IndexOf(actions, "Press") >= 0 && actions[actions.Length - 1] == "Release", "Consumer did not self-release after guardian heartbeat expiry.");
+                }
+            });
+            Check("intentional guardian cancellation releases held input and succeeds", delegate {
+                using (Stub stub = new Stub(true, false))
+                {
+                    Program.GuardReport result = Program.GuardCancellationFixture(stub.Port,
+                        delegate { return Array.IndexOf(stub.ActionSnapshot(), "Press") >= 0; });
+                    WaitUntil(delegate { return stub.ActionSnapshot().Length >= 5; });
+                    string[] workerActions = stub.FirstConnectionSnapshot();
+                    int press = Array.IndexOf(workerActions, "Press");
+                    Assert(result.status == "ok" && result.error == null && result.ownedChildStopped &&
+                        !result.ownedChildTerminated && result.finalReleaseSent,
+                        "Intentional cancellation was reported as failure: " + result.error);
+                    Assert(press >= 0 && Array.IndexOf(workerActions, "Release", press + 1) > press,
+                        "Worker did not release on its original connection before graceful exit.");
                 }
             });
             return Report("explicit-owned-loopback-stub", true);

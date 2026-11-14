@@ -26,6 +26,7 @@ namespace InputLift.Kanata
             internal int Port, CapturePid, GuardianPid;
             internal long CaptureStart, GuardianStart;
             internal bool TestWithholdGuardianHeartbeat;
+            internal Func<bool> TestRequestStop;
         }
         internal sealed class GuardReport
         {
@@ -148,6 +149,11 @@ namespace InputLift.Kanata
             return Guard(new Options { Mode = "--demo", Port = port, Key = "inputlift-fn", WorkerKind = scenario,
                 TestWithholdGuardianHeartbeat = scenario == "test-parent-timeout" });
         }
+        internal static GuardReport GuardCancellationFixture(int port, Func<bool> requestStop)
+        {
+            RequireNormalUser();
+            return Guard(new Options { Mode = "--demo", Port = port, Key = "inputlift-fn", WorkerKind = "demo", TestRequestStop = requestStop });
+        }
         private static GuardReport Guard(Options options)
         {
             cancelled = false;
@@ -206,6 +212,7 @@ namespace InputLift.Kanata
                 Stopwatch time = Stopwatch.StartNew(); long lastHeartbeat = -250;
                 while (!cancelled && !child.HasExited)
                 {
+                    if (options.TestRequestStop != null && options.TestRequestStop()) { cancelled = true; break; }
                     lock (incoming.Gate) if (incoming.Failure != null) throw new IOException(incoming.Failure);
                     double age = (Stopwatch.GetTimestamp() - Interlocked.Read(ref incoming.LastProgress)) * 1000.0 / Stopwatch.Frequency;
                     if (age > 2500) throw new TimeoutException("Owned output-consumer heartbeat expired.");
@@ -224,10 +231,19 @@ namespace InputLift.Kanata
             {
                 if (child != null)
                 {
+                    // Explicit stop is meaningful only after the private inherited
+                    // channel's authenticated handoff. EOF without this frame is
+                    // still a liveness failure, including a crashed supervisor.
+                    bool gracefulStop = cancelled && failure == null;
+                    if (gracefulStop)
+                    {
+                        try { if (!child.HasExited) child.StandardInput.WriteLine("ILGUARD1 stop"); }
+                        catch (Exception error) { if (!child.HasExited && failure == null) failure = error; }
+                    }
                     try { child.StandardInput.Close(); } catch { }
                     try
                     {
-                        if (!child.WaitForExit(700))
+                        if (!child.WaitForExit(gracefulStop ? 2000 : 700))
                         {
                             // This exact handle comes from this supervisor's Start;
                             // no caller-supplied PID can be selected for termination.
@@ -262,7 +278,8 @@ namespace InputLift.Kanata
             return report;
         }
         private sealed class GuardianLink
-        { internal volatile bool Lost; internal long LastHeartbeat; }
+        { internal volatile bool Lost, StopRequested; internal long LastHeartbeat; }
+        private sealed class GracefulStopException : OperationCanceledException { }
         private sealed class WorkerWatch
         {
             private readonly GuardianLink link; private long sequence, last;
@@ -287,41 +304,51 @@ namespace InputLift.Kanata
                     if (ReadBoundedLine(Console.In, 64) != "ILGUARD1 " + options.Token) { link.Lost = true; return; }
                     Interlocked.Exchange(ref link.LastHeartbeat, Stopwatch.GetTimestamp());
                     string line;
-                    while ((line = ReadBoundedLine(Console.In, 64)) == "ILGUARD1 heartbeat") Interlocked.Exchange(ref link.LastHeartbeat, Stopwatch.GetTimestamp());
+                    while ((line = ReadBoundedLine(Console.In, 64)) != null)
+                    {
+                        if (line == "ILGUARD1 stop") { link.StopRequested = true; return; }
+                        if (line != "ILGUARD1 heartbeat") break;
+                        Interlocked.Exchange(ref link.LastHeartbeat, Stopwatch.GetTimestamp());
+                    }
                 }
                 catch { }
-                finally { link.Lost = true; }
+                finally { if (!link.StopRequested) link.Lost = true; }
             });
             input.IsBackground = true; input.Name = "InputLift guardian liveness"; input.Start();
             Stopwatch ready = Stopwatch.StartNew();
             while (Interlocked.Read(ref link.LastHeartbeat) == 0 && !link.Lost && ready.ElapsedMilliseconds < 1500) Thread.Sleep(10);
-            WorkerWatch watch = new WorkerWatch(link); watch.Check();
-            using (KanataTcp transport = KanataTcp.Connect(options.Port, options.Key))
-            using (KanataConsumer consumer = new KanataConsumer(transport, Source, Control))
+            try
             {
-                consumer.BeginSession();
-                CaptureFrameConsumer frames = new CaptureFrameConsumer(consumer, Source, Control);
-                Action<string> apply = delegate(string line) { watch.Check(); if (consumer.IsFaulted) throw new IOException("Kanata transport stopped; no reconnect is attempted."); frames.Accept(line); };
-                try
+                WorkerWatch watch = new WorkerWatch(link); watch.Check();
+                using (KanataTcp transport = KanataTcp.Connect(options.Port, options.Key))
+                using (KanataConsumer consumer = new KanataConsumer(transport, Source, Control))
                 {
-                    if (options.WorkerKind == "bridge") PipeFrames(options, watch, apply);
-                    else DemoFrames(options.WorkerKind, watch, apply);
-                }
-                finally
-                {
-                    // Cleanup does not depend on the guardian input thread being
-                    // live. Dispose retries if an output was still owned/uncertain.
-                    try { transport.Send(KeyAction.Release); } catch { }
-                    Stopwatch observe = Stopwatch.StartNew();
-                    while (transport.IsHealthy && !transport.SawBaseAfterLifted && observe.ElapsedMilliseconds < 300) Thread.Sleep(10);
-                    Console.WriteLine("ILRESULT1 " + (transport.SawBase ? "1" : "0") + " " +
-                        (transport.SawLifted ? "1" : "0") + " " + (transport.SawBaseAfterLifted ? "1" : "0"));
+                    consumer.BeginSession();
+                    CaptureFrameConsumer frames = new CaptureFrameConsumer(consumer, Source, Control);
+                    Action<string> apply = delegate(string line) { watch.Check(); if (consumer.IsFaulted) throw new IOException("Kanata transport stopped; no reconnect is attempted."); frames.Accept(line); };
+                    try
+                    {
+                        if (options.WorkerKind == "bridge") PipeFrames(options, watch, apply);
+                        else DemoFrames(options.WorkerKind, watch, apply);
+                    }
+                    finally
+                    {
+                        // Cleanup also runs for an explicit graceful-stop signal.
+                        // Dispose retries if output remains owned or uncertain.
+                        try { transport.Send(KeyAction.Release); } catch { }
+                        Stopwatch observe = Stopwatch.StartNew();
+                        while (transport.IsHealthy && !transport.SawBaseAfterLifted && observe.ElapsedMilliseconds < 300) Thread.Sleep(10);
+                        Console.WriteLine("ILRESULT1 " + (transport.SawBase ? "1" : "0") + " " +
+                            (transport.SawLifted ? "1" : "0") + " " + (transport.SawBaseAfterLifted ? "1" : "0"));
+                    }
                 }
             }
+            catch (GracefulStopException) { return 0; }
             return 0;
         }
         private static void CheckGuardian(GuardianLink link)
         {
+            if (link.StopRequested) throw new GracefulStopException();
             long last = Interlocked.Read(ref link.LastHeartbeat);
             double age = last == 0 ? double.MaxValue : (Stopwatch.GetTimestamp() - last) * 1000.0 / Stopwatch.Frequency;
             if (link.Lost || age > 2000) throw new IOException("Guardian heartbeat ended; output consumer is stopping.");

@@ -6,6 +6,12 @@ compatibility certificate. Source version: `0.1.0-alpha.1`. GitHub's
 is the authority for publication state; a version in this file alone is not a
 published release.
 
+The `0.1.0-alpha.2` candidate adds a protected-state launcher, graceful stop,
+and hosted-only native pipe fixtures. The launcher passes 98 pure checks without
+invoking its entrypoint or reading protected state. Native fixture execution,
+installed deployment, and physical-source results are separate gates; do not
+infer them from successful compilation or the earlier alpha.1 table below.
+
 | Stage | Evidence | Status |
 |---|---|---|
 | Pinned interface | Kanata v1.12.0, `02242ef761ef43b860eac30067ce86904be7d466`; [references](../../evidence/kanata/protocol-reference.md) | Reviewed |

@@ -23,6 +23,83 @@ The existing Deskflow output remains a separate installation mode. Another KVM
 is not involved in this demonstration. The supplied physical decoder still
 supports only the profile in [compatibility](../compatibility.md).
 
+## Fresh physical-source setup for developers
+
+This is an **unvalidated, opt-in physical test path**, not a migration procedure
+for a working helper. The synthetic demonstration above does not need it. Use a
+fresh supported machine only after reviewing the source, narrow profile/radio
+requirements, security model and cleanup plan. Do not disable an existing helper
+or overwrite its files just to follow this guide. Setup is create-only and
+refuses existing application/state directories or an existing sensitive-logging
+flag. Stop on an error and inspect its exact wording.
+
+Build both optional components without starting them:
+
+```powershell
+./Build.ps1 -IncludeWindowsCapture -IncludeKanataAdapter
+```
+
+After separate explicit approval for ongoing sensitive Bluetooth logging and
+automatic logon startup, use administrator PowerShell under the **same Windows
+account** that will run the normal-user companion:
+
+```powershell
+$keyboardAddress = Read-Host 'Private Bluetooth address, 12 hex digits; do not share'
+$packageHash = (Get-FileHash ./artifacts/package/package.json -Algorithm SHA256).Hash
+./Setup.ps1 -Mode Install -OutputMode events-only `
+  -KeyboardAddress $keyboardAddress -ExpectedManifestSha256 $packageHash `
+  -EnablePersistentLogging -CreateStartMenuShortcut -Start
+```
+
+The hash binds setup to that exact locally built package; it is not a substitute
+for source review. The explicit `events-only` mode is required. Omitting it
+selects the legacy Deskflow/Mouse 5 output, which does not provide the Fn pipe.
+Setup creates a logon-startup task and protected Program Files/ProgramData state.
+Do not share the device address or installation journals publicly.
+
+Start the separately reviewed Kanata example on loopback, then open **normal,
+non-administrator PowerShell** in this checkout. Inspect the current source:
+
+```powershell
+./integrations/kanata/Start-Bridge.ps1
+```
+
+Inspection reads protected metadata and prints only readiness/status information.
+It does not connect, start capture, change settings, or launch a process. To
+explicitly connect the companion:
+
+```powershell
+./integrations/kanata/Start-Bridge.ps1 -Connect
+```
+
+The launcher obtains the nonce and worker identity from the protected current
+session, checks ownership/mode/freshness and refuses an already connected source.
+The companion still authenticates the actual pipe server before accepting data.
+Do not copy session identifiers from an issue or another machine. The source's
+`AwaitConsumer` state is expected before this connection.
+
+There is one reader per capture session. After the bridge has connected, another
+inspection/connection attempt deliberately refuses that session. If the bridge
+disconnects or fails after opening the pipe, do not reconnect using old metadata.
+Stop acquisition, review its owned cleanup, and start a fresh source session only
+after that cleanup is confirmed. Inspect the new session and repeat identification.
+If cleanup is uncertain, use the startup-disable and Windows Restart path below.
+
+Once connected, follow the source's identification instructions: turn the
+keyboard off, wait for the instruction to turn it on, then turn it on and tap /
+release left Shift. Release all keys. In a blank editor, test A → A normally,
+hold the recovered control and test A → B, then release and test A → A. Exercise
+reset/disconnect only after the baseline works, using the tester checklist.
+
+For cleanup, stop the companion with Ctrl+C and stop Kanata to clear any uncertain
+layer. Confirm the harmless sample returns to its baseline before continuing.
+Use **Stop and disable automatic startup** in the InputLift tray for acquisition.
+Verify the helper's owned cleanup result before using Windows **Restart** to
+clear the driver's cached sensitive-logging state. Stopping the companion alone
+does not stop capture or clear logging. Preserve exact errors and review them
+before retrying. Do not restore another helper until its own startup/capture
+state has been reviewed.
+
 ## Protocol and trust boundaries
 
 The companion uses Kanata's protocol-1 `Hello`, `RequestFakeKeyNames`, and

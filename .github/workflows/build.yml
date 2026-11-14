@@ -27,6 +27,9 @@ jobs:
       - name: Verify synthetic packet evidence
         shell: pwsh
         run: ./evidence/kanata/Verify-Fixture.ps1
+      - name: Build native pipe fixture without running it
+        shell: pwsh
+        run: ./tests/native-pipe/Build-Fixture.ps1
       - name: Verify owned loopback transport
         shell: pwsh
         run: ./tests/ci/Invoke-TransportChecks.ps1

@@ -39,9 +39,14 @@ if(-not (Test-Path -LiteralPath $runnerTemp -PathType Container)) { throw 'Runne
 Assert-NoReparse $repoRoot
 Assert-NoReparse $runnerTemp
 $builtFolder=Join-Path $repoRoot 'artifacts\kanata'
-$payloadNames=@('InputLift.Kanata.exe','InputLift.Core.dll')
+$payloadSources=@{
+    'InputLift.Kanata.exe'=(Join-Path $builtFolder 'InputLift.Kanata.exe')
+    'InputLift.Core.dll'=(Join-Path $builtFolder 'InputLift.Core.dll')
+    'InputLift.NativePipeTests.exe'=(Join-Path $repoRoot 'artifacts\native-pipe\InputLift.NativePipeTests.exe')
+}
+$payloadNames=@($payloadSources.Keys | Sort-Object)
 foreach($name in $payloadNames) {
-    $path=Join-Path $builtFolder $name
+    $path=$payloadSources[$name]
     Assert-NoReparse $path
     if(-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Build the optional Kanata adapter first: missing $name." }
 }
@@ -88,7 +93,7 @@ try {
     $acl.SetSecurityDescriptorSddlForm('O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FRFX;;;'+$ownedUser.SID.Value+')')
     Set-Acl -LiteralPath $stage -AclObject $acl
     foreach($name in $payloadNames) {
-        $source=Join-Path $builtFolder $name
+        $source=$payloadSources[$name]
         $destination=Join-Path $stage $name
         Copy-Item -LiteralPath $source -Destination $destination
         if((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -cne
@@ -99,7 +104,7 @@ try {
     $credential=[Management.Automation.PSCredential]::new(($env:COMPUTERNAME+'\'+$accountName),$securePassword)
     # No profile is loaded. These tests use only framework code, inherited pipes
     # and owned loopback sockets; the standard account has read/execute access
-    # to the two hash-verified files, never write access to repository binaries.
+    # to the hash-verified files, never write access to repository binaries.
     $ownedProcess=Start-Process -FilePath (Join-Path $stage 'InputLift.Kanata.exe') `
         -ArgumentList '--test-transport' -Credential $credential -WorkingDirectory $stage `
         -LoadUserProfile:$false -WindowStyle Hidden -PassThru `
@@ -119,17 +124,20 @@ try {
         } catch { if($drain.ElapsedMilliseconds -ge 2950) { throw } }
         if($null -eq $testReport) { Start-Sleep -Milliseconds 50 }
     }
-    if($null -eq $testReport -or $testReport.status -cne 'ok' -or $testReport.tests -ne 7 -or
+    if($null -eq $testReport -or $testReport.status -cne 'ok' -or $testReport.tests -ne 8 -or
        $testReport.mode -cne 'explicit-owned-loopback-stub' -or @($testReport.errors).Count -ne 0 -or
        $testReport.socketsOpened -isnot [bool] -or -not $testReport.socketsOpened -or
        $testReport.realApplicationConnected -isnot [bool] -or $testReport.realApplicationConnected -or
        $testReport.captureStarted -isnot [bool] -or $testReport.captureStarted -or
        $testReport.nativeInputSent -isnot [bool] -or $testReport.nativeInputSent) {
-        throw 'Transport report did not prove all seven owned-stub checks passed without real application/capture/native input.'
+        throw 'Transport report did not prove all eight owned-stub checks passed without real application/capture/native input.'
     }
     if((Test-Path -LiteralPath $stderr) -and -not [string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $stderr -Raw))) {
         throw 'Standard-user transport checks wrote unexpected stderr; inspect ignored artifacts/ci output.'
     }
+    & (Join-Path $repoRoot 'tests\native-pipe\Invoke-Cases.ps1') -ReaderCredential $credential `
+        -ReaderSid $ownedUser.SID.Value -FixtureExecutable (Join-Path $stage 'InputLift.NativePipeTests.exe') `
+        -ReportDirectory (Join-Path $reports 'native-pipe')
 } catch { $failure=$_.Exception }
 finally {
     if($null -ne $ownedProcess) {
@@ -148,7 +156,7 @@ finally {
             # Account-scoped orphan cleanup is restricted further to this run's
             # exact staged image and start time. Open the process handle before
             # checking it so a later PID reuse cannot select another process.
-            foreach($candidate in @(Get-CimInstance Win32_Process -Filter "Name='InputLift.Kanata.exe'")) {
+            foreach($candidate in @(Get-CimInstance Win32_Process -Filter "Name='InputLift.Kanata.exe' OR Name='InputLift.NativePipeTests.exe'")) {
                 $orphan=$null
                 try {
                     $orphan=[Diagnostics.Process]::GetProcessById([int]$candidate.ProcessId)
@@ -157,7 +165,7 @@ finally {
                     $owner=Invoke-CimMethod -InputObject $candidate -MethodName GetOwnerSid
                     if($owner.ReturnValue -eq 0 -and $owner.Sid -eq $ownedUser.SID.Value -and
                        $orphan.StartTime.ToUniversalTime() -ge $startedUtc -and
-                       [IO.Path]::GetFullPath($orphan.MainModule.FileName) -ieq (Join-Path $stage 'InputLift.Kanata.exe')) {
+                       [IO.Path]::GetFullPath($orphan.MainModule.FileName) -ieq (Join-Path $stage $candidate.Name)) {
                         $orphan.Kill()
                         if(-not $orphan.WaitForExit(5000)) { throw 'Owned standard-user test orphan did not stop.' }
                     }
@@ -186,4 +194,4 @@ finally {
 if($cleanupErrors.Count -ne 0) { throw ('Disposable CI cleanup failed: '+($cleanupErrors -join '; ')) }
 if($null -ne $failure) { throw $failure }
 $testReport | ConvertTo-Json -Depth 6 -Compress
-[pscustomobject]@{Harness='github-hosted-standard-user';TemporaryAccountRemoved=$true;Checks=7;RealApplicationConnected=$false;CaptureStarted=$false;NativeInputSent=$false} | ConvertTo-Json -Compress
+[pscustomobject]@{Harness='github-hosted-standard-user';TemporaryAccountRemoved=$true;Checks=8;RealApplicationConnected=$false;CaptureStarted=$false;NativeInputSent=$false} | ConvertTo-Json -Compress

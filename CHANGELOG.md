@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.0-alpha.2
+
+- Add default read-only protected-state inspection and an explicit `-Connect`
+  bridge launcher; session identifiers no longer need to be copied manually.
+- Add 98 pure launcher checks and an explicit event-only installation/recovery
+  recipe for opt-in developer testing.
+- Treat an intentional Ctrl+C as graceful cancellation, with release through the
+  worker's existing connection; unexpected EOF/heartbeat loss remains an error.
+- Add an eighth owned-stub check for stopping while held, plus hosted-only native
+  pipe fixtures. Native execution results must be checked in the validation
+  record; successful fixture compilation is not a native test pass.
+
+The installed event-only and physical Bluetooth path still needs validation.
+There is no independent tester or upstream acceptance claim.
+
 ## 0.1.0-alpha.1
 
 Source-only experimental release. No compiled executables, installers, drivers or

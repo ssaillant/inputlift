@@ -41,6 +41,12 @@ source/consumer termination, and no unintended action while unarmed. Use only
 non-sensitive test input. Stop at the first unexpected error and record its
 exact diagnostic stage; do not retry without reviewing the failure.
 
+Use the explicit [event-only installation recipe](kanata.md#fresh-physical-source-setup-for-developers),
+then the default read-only `Start-Bridge.ps1` inspection before an explicit
+`-Connect`. Do not install the default Deskflow mode or manually guess session
+identifiers. The launcher checks metadata; a successful inspection alone does
+not prove native pipe access or Bluetooth behavior.
+
 ## Report only necessary information
 
 Include:

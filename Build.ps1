@@ -112,6 +112,7 @@ $examplesReport=Run-PureTests $examplesBuildRoot 'InputLift.Examples.exe'
 $adapterReports=@(); $payload=@(); $manifestHash=$null
 $kanataReport=$null
 if($IncludeKanataAdapter) {
+    & (Join-Path $repoRoot 'tests\Test-KanataLauncher.ps1')
     Initialize-BuildDirectory $kanataBuildRoot
     $kanataCoreLibrary=Join-Path $kanataBuildRoot 'InputLift.Core.dll'
     Assert-NoReparse $kanataCoreLibrary
