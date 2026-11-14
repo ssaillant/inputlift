@@ -84,8 +84,14 @@ internal static class NativePipeTests
     private static void WaitUntil(Func<bool> condition, int timeout, string failure)
     {
         Stopwatch timer = Stopwatch.StartNew();
-        while (!condition() && timer.ElapsedMilliseconds < timeout) Thread.Sleep(10);
-        Check(condition(), failure);
+        // Some observations consume a one-shot signal. Do not probe again after
+        // success (TakeConnectionReset deliberately clears the observed flag).
+        while (true)
+        {
+            if (condition()) return;
+            Check(timer.ElapsedMilliseconds < timeout, failure);
+            Thread.Sleep(10);
+        }
     }
     private static void Control(string expected)
     {

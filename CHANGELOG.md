@@ -8,6 +8,9 @@
   recipe for opt-in developer testing.
 - Treat an intentional Ctrl+C as graceful cancellation, with release through the
   worker's existing connection; unexpected EOF/heartbeat loss remains an error.
+- Correct the event-only pipe's native direction from inbound to outbound. The
+  [Windows API contract](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createnamedpipea)
+  requires outbound access for a read-only client; alpha.1's flag was wrong.
 - Add an eighth owned-stub check for stopping while held, plus hosted-only native
   pipe fixtures. Native execution results must be checked in the validation
   record; successful fixture compilation is not a native test pass.
