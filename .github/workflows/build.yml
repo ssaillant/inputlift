@@ -1,0 +1,26 @@
+name: Build and pure checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and test independent core
+        shell: pwsh
+        run: ./Build.ps1
+      - name: Build and test optional Deskflow integration
+        shell: pwsh
+        run: ./Build.ps1 -IncludeDeskflowAdapter
+      - name: Verify failed builds invalidate success artifacts
+        shell: pwsh
+        run: ./tests/Test-BuildFailure.ps1
