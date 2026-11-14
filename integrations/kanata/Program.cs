@@ -144,7 +144,10 @@ namespace InputLift.Kanata
         }
         internal static GuardReport GuardFixture(int port, string scenario)
         {
-            RequireNormalUser();
+            // This internal entry point is called only by --test-transport,
+            // after it creates an owned stub on loopback. Hosted Windows runners
+            // may be administrators. Production --demo/--bridge still pass
+            // RequireNormalUser in Main; no real application is used here.
             return Guard(new Options { Mode = "--demo", Port = port, Key = "inputlift-fn", WorkerKind = scenario,
                 TestWithholdGuardianHeartbeat = scenario == "test-parent-timeout" });
         }
