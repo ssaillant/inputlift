@@ -76,7 +76,8 @@ internal static class NativePipeTests
         catch (Exception error)
         {
             Console.WriteLine(Json.Serialize(new { phase = "result", status = "error", error = error.GetType().Name + ": " + error.Message,
-                bluetoothCaptureStarted = false, nativeInputSent = false, installedDeploymentValidated = false, remoteSmbBehaviorValidated = false }));
+                bluetoothCaptureStarted = false, nativeInputSent = false, installedDeploymentValidated = false,
+                firstInstanceFlagBehaviorValidated = false, remoteSmbBehaviorValidated = false }));
             return 1;
         }
     }
@@ -124,8 +125,11 @@ internal static class NativePipeTests
         }
         Check(selected == 1 && system == 1 && administrators == 1, "Expected exactly selected-reader, SYSTEM and administrator grants.");
     }
-    private static void FirstInstance(string nonce, FnEventPipe initial)
+    private static int RejectDuplicateInstance(string nonce, FnEventPipe initial)
     {
+        FieldInfo flags = typeof(FnEventPipe).GetField("OutboundOverlappedFirst", BindingFlags.NonPublic | BindingFlags.Static);
+        Check(flags != null && (((uint)flags.GetRawConstantValue()) & 0x00080000U) != 0,
+            "Compiled production source must retain its first-instance flag policy.");
         bool denied = false, duplicateCreated = false;
         string failureBefore = initial.Failure;
         bool connectedBefore = initial.Connected;
@@ -139,12 +143,22 @@ internal static class NativePipeTests
         {
             observedType = error.GetType().FullName; observedMessage = error.Message;
             System.ComponentModel.Win32Exception native = error as System.ComponentModel.Win32Exception;
-            if (native != null) { observedNativeCode = native.NativeErrorCode; denied = native.NativeErrorCode == 5; }
+            if (native != null)
+            {
+                observedNativeCode = native.NativeErrorCode;
+                // With both first-instance policy and maxInstances=1 in effect,
+                // the observed one-producer contract may reject at either the
+                // access check or instance limit. This does not isolate the flag.
+                denied = native.NativeErrorCode == 5 || native.NativeErrorCode == 231;
+            }
         }
-        Check(denied, "A second production first-instance pipe must be rejected with access denied. Observed: " +
+        Check(denied && !duplicateCreated && failureBefore == null && initial.Failure == null &&
+            !connectedBefore && !initial.Connected,
+            "A duplicate producer must be rejected with access denied or pipe busy while the original remains healthy and awaiting its reader. Observed: " +
             Json.Serialize(new { duplicateCreated = duplicateCreated, exceptionType = observedType, nativeErrorCode = observedNativeCode,
                 exceptionMessage = observedMessage, initialFailureBefore = failureBefore, initialConnectedBefore = connectedBefore,
                 initialFailureAfter = initial.Failure, initialConnectedAfter = initial.Connected }));
+        return observedNativeCode.Value;
     }
     private static int Server(Options options)
     {
@@ -152,10 +166,11 @@ internal static class NativePipeTests
         Check(Console.IsInputRedirected && Console.IsOutputRedirected, "The fixture server requires its owning CI process pipes.");
         DailyPaths.ReaderSid = options.ReaderSid;
         bool disconnected = false, timeoutStopped = false, noReplay = false, disposalBounded = false;
+        int duplicateErrorCode = 0;
         using (FnEventPipe producer = new FnEventPipe(options.Nonce))
         {
             ActualAcl(producer, options.ReaderSid);
-            FirstInstance(options.Nonce, producer);
+            duplicateErrorCode = RejectDuplicateInstance(options.Nonce, producer);
             // Disconnected publication is deliberately not queued for a later reader.
             producer.Publish("heartbeat", true); producer.Publish("down", false); producer.Publish("up", true);
             using (Process process = Process.GetCurrentProcess())
@@ -213,7 +228,8 @@ internal static class NativePipeTests
         // Recreating after disposal proves that the owned named handle was closed.
         using (FnEventPipe recreated = new FnEventPipe(options.Nonce)) { }
         Console.WriteLine(Json.Serialize(new { phase = "result", status = "ok", scenario = options.Scenario,
-            actualKernelAclVerified = true, firstInstanceDenied = true, nativeHandleClosed = true,
+            actualKernelAclVerified = true, duplicateInstanceDenied = true, duplicateInstanceErrorCode = duplicateErrorCode,
+            firstInstanceFlagPolicyPresent = true, firstInstanceFlagBehaviorValidated = false, nativeHandleClosed = true,
             disposalBounded = disposalBounded, freshConnectionReset = noReplay, disconnectedConsumerStopped = disconnected,
             blockedReaderStopped = timeoutStopped, bluetoothCaptureStarted = false, nativeInputSent = false,
             installedDeploymentValidated = false, productionOwnerBindingValidated = false, remoteSmbBehaviorValidated = false }));
@@ -327,7 +343,7 @@ internal static class NativePipeTests
             identityPrimitiveCrossAccountDenied = options.Scenario != "denied-write" && !identityValidated,
             orderedFramesReachedActualConsumer = ordered, unarmedDownRejected = unarmedRejected, frames = frames,
             bluetoothCaptureStarted = false, nativeInputSent = false, installedDeploymentValidated = false,
-            productionOwnerBindingValidated = false, remoteSmbBehaviorValidated = false }));
+            productionOwnerBindingValidated = false, firstInstanceFlagBehaviorValidated = false, remoteSmbBehaviorValidated = false }));
         return 0;
     }
 }

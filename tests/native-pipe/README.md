@@ -56,15 +56,26 @@ stop; no automatic retry.
 
 | Scenario | Reader behavior | Native proof |
 |---|---|---|
-| `ordered` | Read frames into the actual public capture-frame consumer with an in-memory output. | Kernel ACL, first-instance collision denial, selected-user read, initial reset/no preconnection replay, ordered neutral/down/up/reset, disconnect stop. |
+| `ordered` | Read frames into the actual public capture-frame consumer with an in-memory output. | Kernel ACL, duplicate-producer rejection, selected-user read, initial reset/no preconnection replay, ordered neutral/down/up/reset, disconnect stop. |
 | `denied-write` | Attempt an outbound/write connection; must receive access denied. | Selected read-only principal cannot send data to the outbound producer. |
 | `idle-dispose` | Do not start a client; write `finish` after ready. | Cancellation and bounded disposal before a reader connects. |
 | `unarmed-down` | Read initial reset until server EOF. | Actual wire writer rejects a down before neutral and emits no press. |
 | `blocked-reader` | Connect and intentionally do not read for 6.5 seconds. | Actual buffer/write or bounded queue overload stops the producer, followed by bounded disposal. |
 
-Every server inspects the kernel-returned DACL, proves that a second first-instance
-creation fails, and recreates the same pipe after disposal to prove handle closure.
-No raw payload or ordinary-key data exists in this fixture.
+Every server inspects the kernel-returned DACL, requires a duplicate producer to
+fail with `ERROR_ACCESS_DENIED` (5) or `ERROR_PIPE_BUSY` (231), and confirms that
+the original producer stays healthy while awaiting its reader. It records the
+actual rejection code as `duplicateInstanceErrorCode`, then recreates the same
+pipe after disposal to prove handle closure. No raw payload or ordinary-key data
+exists in this fixture.
+
+The source has both the first-instance flag and `maxInstances=1`. The hosted
+diagnostic observed code 231, which establishes the combined one-producer
+contract but does not isolate the first-instance flag's behavior. The fixture
+separately checks that the compiled source retains that flag policy;
+`firstInstanceFlagBehaviorValidated=false` deliberately remains in every report.
+Other exception types/codes, successful duplicate creation or damage to the
+original producer fail the case. No assertion accepts an arbitrary error.
 
 The reader uses the production server-PID P/Invoke and limited-process-query
 helper. If the different-account default process DACL denies query access, the

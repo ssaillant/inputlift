@@ -123,12 +123,15 @@ foreach($scenario in @('ordered','denied-write','idle-dispose','unarmed-down','b
         $serverReport=$serverOut.Result | ConvertFrom-Json
         if($server.ExitCode -ne 0 -or $null -eq $serverReport -or $serverReport.phase -cne 'result' -or
            $serverReport.status -cne 'ok' -or $serverReport.scenario -cne $scenario -or
-           -not $serverReport.actualKernelAclVerified -or -not $serverReport.firstInstanceDenied -or
+           -not $serverReport.actualKernelAclVerified -or -not $serverReport.duplicateInstanceDenied -or
+           $serverReport.duplicateInstanceErrorCode -notin @(5,231) -or -not $serverReport.firstInstanceFlagPolicyPresent -or
+           $serverReport.firstInstanceFlagBehaviorValidated -or
            -not $serverReport.nativeHandleClosed -or -not $serverReport.disposalBounded) { throw ('Native server failed: '+$serverOut.Result+' '+$serverErr.Result) }
         if(-not [string]::IsNullOrWhiteSpace($serverErr.Result)) { throw ('Native server stderr: '+$serverErr.Result) }
         foreach($report in @($serverReport,$clientReport)) {
             if($null -ne $report -and ($report.bluetoothCaptureStarted -or $report.nativeInputSent -or
-               $report.installedDeploymentValidated -or $report.productionOwnerBindingValidated -or $report.remoteSmbBehaviorValidated)) {
+               $report.installedDeploymentValidated -or $report.productionOwnerBindingValidated -or
+               $report.firstInstanceFlagBehaviorValidated -or $report.remoteSmbBehaviorValidated)) {
                 throw 'Native fixture reported a side effect or validation scope it must not perform/claim.'
             }
         }
@@ -163,7 +166,7 @@ foreach($scenario in @('ordered','denied-write','idle-dispose','unarmed-down','b
 }
 $summary=[ordered]@{status='ok';mode='hosted-native-pipe';scenarios=$results.Count;results=$results.ToArray();
     BluetoothCaptureStarted=$false;NativeInputSent=$false;InstalledDeploymentValidated=$false;
-    ProductionOwnerBindingValidated=$false;RemoteSmbBehaviorValidated=$false}
+    ProductionOwnerBindingValidated=$false;FirstInstanceFlagBehaviorValidated=$false;RemoteSmbBehaviorValidated=$false}
 $json=$summary|ConvertTo-Json -Depth 8
 [IO.File]::WriteAllText((Join-Path $reports 'native-pipe-results.json'),$json,[Text.UTF8Encoding]::new($false))
 $json
