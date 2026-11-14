@@ -180,6 +180,8 @@ internal static class GlobeEtwFnProbe
         private bool neutralReady;
         private readonly RelayRoutePolicy routePolicy=new RelayRoutePolicy();
         private long retiredDowns,retiredPairs,physicalDownCount,progressSequence,lastStatusMilliseconds=-1000;
+        private long statusPublicationDeferrals;
+        private int lastStatusPublicationWin32;
         private readonly int workerPid=Process.GetCurrentProcess().Id;
         private readonly long workerStart=Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks;
         private long staleDownsIgnored;
@@ -281,6 +283,7 @@ internal static class GlobeEtwFnProbe
         {
             long now=elapsed.ElapsedMilliseconds;
             if(!force && now-lastStatusMilliseconds<1000) return;
+            long nextSequence=checked(progressSequence+1);
             object status;
             lock(gate)
             {
@@ -294,7 +297,8 @@ internal static class GlobeEtwFnProbe
                 var current=relay==null ? null : relay.Snapshot();
                 status=new { Nonce=SessionGuid(sessionName).ToString("N"),WorkerPid=workerPid,WorkerStartUtcTicks=workerStart,
                     OutputMode=outputMode,PipeName=eventPipe==null?null:eventPipe.Name,
-                    ProgressSequence=++progressSequence,State=state,Error=error,
+                    ProgressSequence=nextSequence,State=state,Error=error,
+                    StatusPublicationDeferrals=statusPublicationDeferrals,LastStatusPublicationWin32=lastStatusPublicationWin32,
                     PhysicalGlobePresses=physicalDownCount,OutputPresses=retiredDowns+(current==null?0:current.ChordsStarted),
                     OutputPairs=retiredPairs+(current==null?0:current.ChordsReleased),KeyboardBound=decoder.Bound,
                     NeutralConfirmed=neutralReady,RestartRequired=true,UpdatedUtc=DateTime.UtcNow.ToString("o"),
@@ -305,8 +309,28 @@ internal static class GlobeEtwFnProbe
                     RouteEpoch=route==null?(long?)null:route.Epoch };
             }
             string path=DailyPaths.FileFor(SessionGuid(sessionName).ToString("N"),".status.json");
-            DailyPaths.WriteTextProtected(path,new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(status),false);
+            EphemeralStatusPublisher.Result publication;
+            try {
+                publication=DailyPaths.TryWriteStatusProtected(path,new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(status),
+                    delegate{return !force&&stopRequested.WaitOne(0);});
+            }
+            catch(Exception error)
+            {
+                object phase=error.Data["InputLift.StatusPublicationPhase"],code=error.Data["InputLift.StatusPublicationHResult"];
+                notifications.TryWrite("{\"state\":\"status-publication-failed\",\"phase\":\""+(phase is string?(string)phase:"Unknown")+
+                    "\",\"hresult\":\"0x"+unchecked((uint)(code is int?(int)code:error.HResult)).ToString("X8",CultureInfo.InvariantCulture)+"\"}");
+                throw;
+            }
+            // Throttle attempts, but only an actual replacement publishes a new
+            // progress sequence. The independent 15-second lease is unchanged.
             lastStatusMilliseconds=now;
+            EphemeralStatusPublisher.ApplyPublishedSequence(ref progressSequence,nextSequence,publication);
+            if(publication.State==EphemeralStatusPublisher.Outcome.Deferred)
+            {
+                statusPublicationDeferrals++;lastStatusPublicationWin32=publication.LastWin32;
+                notifications.TryWrite("{\"state\":\"status-publication-deferred\",\"phase\":\""+publication.LastPhase+
+                    "\",\"win32\":"+publication.LastWin32+",\"attempts\":"+publication.Attempts+",\"progressPublished\":false}");
+            }
         }
 
         private void OnPowerModeChanged(object sender,PowerModeChangedEventArgs args)

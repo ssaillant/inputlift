@@ -39,6 +39,16 @@ of the following:
 - Registry-flag absence, owned trace stopped, worker quiescence and shortcut release.
 - Guard and independent guardian exit, with only the exact classified timeout errors.
 
+Cleanup attempts owned registry restoration before child/output/trace teardown,
+and preserves partial registry proof separately. The guardian does this before
+its final journal read; parent registry fallback retains its state-file preflight
+and requires confirmed guardian exit plus the diagnostic mutex. A foreign setting
+owner prevents registry writes and direct output release, while exact owned
+child/trace cleanup still runs after guardian exit. Output then uses its existing
+separate mutex check. A blocked native call can still prevent complete cleanup.
+Partial registry proof does not admit
+an automatic retry or clear the driver's cached logging state.
+
 The attempt waits at least five seconds and requires two seconds of fresh local
 Deskflow-window responses. It validates the protected installation, consent,
 configured keyboard/output mode and enabled owned task again before launch.
@@ -75,6 +85,12 @@ cover blocked/stale probes, pause/resume generations, epoch changes, held-key
 release/rearming, mode separation, one-attempt budgeting, Stop races and actual
 JSON deserialization into the production cleanup classifier. They start no
 Bluetooth capture, native input, installed task or device reconnect.
+
+The guard's self-test also exercises the actual cleanup coordinator with 113
+injected ordering/failure checks. These verify restoration precedes entry into
+potentially blocking teardown, returned failures do not skip later stages,
+parent ownership gates remain required, and partial proof is not complete
+cleanup. They make no registry, child-process, native-input or trace calls.
 
 The local suite passes 581 recovery checks (358 policy checks across 21 scenarios,
 214 production JSON cases and nine completed-guard boundary cases), plus 29 synthetic probe/admission and

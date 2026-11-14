@@ -28,7 +28,7 @@ Assert-NoReparse $OutputDirectory
 [void][IO.Directory]::CreateDirectory($OutputDirectory)
 $target=Join-Path $OutputDirectory 'InputLift.RecoveryTests.exe'
 Assert-NoReparse $target
-$sources=@('src\InputLift.cs','src\CaptureRecoveryPolicy.cs','src\DailyPaths.cs','src\DeskflowRouteProbe.cs',
+$sources=@('src\InputLift.cs','src\CaptureRecoveryPolicy.cs','src\DailyPaths.cs','src\EphemeralStatusPublisher.cs','src\DeskflowRouteProbe.cs',
     'tests\recovery\CaptureRecoveryPolicyTests.cs','tests\recovery\RecoveryBoundaryTests.cs') |
     ForEach-Object { Join-Path $repoRoot $_ }
 foreach($source in $sources) {

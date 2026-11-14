@@ -236,6 +236,28 @@ internal static class DailyPaths
         if(!PathEquals(Path.GetDirectoryName(Path.GetFullPath(path)),StateDirectory)) return false;
         return Regex.IsMatch(Path.GetFileName(path),@"^(active|cleanup|daily-[0-9a-f]{32}\.[a-z0-9-]+)\.json$",RegexOptions.CultureInvariant);
     }
+    private static bool IsEphemeralStatusFile(string path)
+    {
+        return PathEquals(Path.GetDirectoryName(Path.GetFullPath(path)),StateDirectory)&&
+            Regex.IsMatch(Path.GetFileName(path),@"\Adaily-[0-9a-f]{32}\.status\.json\z",RegexOptions.CultureInvariant);
+    }
+    internal static EphemeralStatusPublisher.Result TryWriteStatusProtected(string path,string text,Func<bool> cancelled)
+    {
+        if(!IsEphemeralStatusFile(path))throw new ArgumentException("Only a current protected status snapshot may use ephemeral publication.");
+        Action validate=delegate {
+            if((File.GetAttributes(StateDirectory)&FileAttributes.ReparsePoint)!=0)
+                throw new InvalidOperationException("Status directory must not be a reparse point.");
+            if(File.Exists(path))
+            {
+                if((File.GetAttributes(path)&FileAttributes.ReparsePoint)!=0)throw new InvalidOperationException("Status snapshot must not be a reparse point.");
+                string owner=((SecurityIdentifier)File.GetAccessControl(path).GetOwner(typeof(SecurityIdentifier))).Value;
+                if(owner!="S-1-5-32-544"&&owner!="S-1-5-18")throw new InvalidOperationException("Status snapshot is not administrator/SYSTEM owned.");
+            }
+        };
+        FileSecurity security=new FileSecurity();
+        security.SetSecurityDescriptorSddlForm("O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRFX;;;"+OwnerSid+")");
+        return EphemeralStatusPublisher.Publish(new EphemeralStatusPublisher.NativeTemporaryStatus(path,text,security,validate),cancelled);
+    }
     // Explicit owner/DACL on every runtime journal prevents an unelevated
     // object-creator owner from changing its ACL despite a read-only ACE.
     internal static void WriteTextProtected(string path,string text,bool durable)
@@ -280,6 +302,11 @@ internal static class DailyPaths
         check(codeRefused,"Arbitrary executable paths refused");
         check(PathEquals(CodeFile("InputLiftCapture.exe"),Path.Combine(CodeDirectory,"InputLiftCapture.exe")),"Only fixed installed capture executable is resolved");
         check(IsStateFile(FileFor(nonce,".status.json")) && IsStateFile(Path.Combine(StateDirectory,"active.json")),"Runtime writes allow only fixed metadata files");
+        check(IsEphemeralStatusFile(FileFor(nonce,".status.json")),"Only the exact status suffix uses transient publication.");
+        foreach(string suffix in new[]{".state.json",".shortcut.json",".guardian-state.json",".result.json"})
+            check(!IsEphemeralStatusFile(FileFor(nonce,suffix)),"Durable state and ownership journals cannot use transient status publication.");
+        check(!IsEphemeralStatusFile(Path.Combine(StateDirectory,"consent.json"))&&!IsEphemeralStatusFile(Path.Combine(StateDirectory,"active.json")),
+            "Consent and active-run identity cannot use transient status publication.");
         check(!IsStateFile(Path.Combine(StateDirectory,"consent.json")) && !IsStateFile(Path.Combine(StateDirectory,"child","active.json")) &&
             !IsStateFile(Path.Combine(CodeDirectory,"active.json")),"Runtime journal writer cannot change consent, code or nested paths");
         var consent=new System.Collections.Generic.Dictionary<string,object>{{"Version",1},{"ApprovedPersistentLogging",true},{"OwnerSid",OwnerSid}};

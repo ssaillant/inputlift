@@ -633,23 +633,41 @@ internal static class DailyGuard
                     // Close the child's retained injection lease before any
                     // cleanup, including when the parent is paused or exited.
                     // Failure here must not skip independent registry cleanup.
-                    try { done.Set(); }
-                    catch(Exception error) { errors.Add(ErrorText("Close bridge injection lease",error)); }
-                    try { Journal current=ReadJournal(nonce);RequireJournalContinuity(final,current);final=current; }
-                    catch(Exception error) { errors.Add(ErrorText("Read final guardian journal",error)); }
-                    if (armed)
-                    {
-                        // Each cleanup is isolated: a trace/journal failure must
-                        // never prevent the independent flag-restoration attempt.
-                        try { childQuiesced=EndOwnedChild(final, errors); }
-                        catch(Exception error) { errors.Add(ErrorText("Guardian stop owned child",error)); }
-                        try { shortcutReleased=RecoverOwnedShortcut(final,childQuiesced,errors,out shortcutStatus); }
-                        catch(Exception error) { errors.Add(ErrorText("Guardian release owned shortcut",error)); }
-                        try { traceStopped=StopAcknowledgedTrace(final, errors); }
-                        catch(Exception error) { errors.Add(ErrorText("Guardian stop owned trace",error)); }
-                        try { restoration=RestoreExpectedValue(true); valueAbsent=RegistryValueAbsent(); }
-                        catch(Exception error) { errors.Add(ErrorText("Guardian restore diagnostic flag",error)); }
-                    }
+                    OwnedCleanupCoordinator.Guardian(armed,
+                        delegate { done.Set(); },
+                        delegate { restoration=RestoreExpectedValue(true); },
+                        delegate { valueAbsent=RegistryValueAbsent(); },
+                        delegate {
+                            // This is partial proof, not completed cleanup. A
+                            // later blocked driver/file call must not conceal an
+                            // already verified registry-restoration attempt.
+                            state.WriteMayHaveOccurred=armed;
+                            state.RegistryRestoreConfirmed=valueAbsent;
+                            state.RestoreStatus=restoration;
+                            state.DriverRefreshAttempted=armed;
+                            state.RestartRequired=armed;
+                            state.Phase=valueAbsent?"registry-restored":"registry-cleanup-unconfirmed";
+                            WriteJson(FileFor(nonce,".guardian-state.json"),state);
+                        },
+                        delegate { Journal current=ReadJournal(nonce);RequireJournalContinuity(final,current);final=current; },
+                        delegate { childQuiesced=EndOwnedChild(final, errors); },
+                        delegate { shortcutReleased=RecoverOwnedShortcut(final,childQuiesced,errors,out shortcutStatus); },
+                        delegate { traceStopped=StopAcknowledgedTrace(final, errors); },
+                        delegate(OwnedCleanupStep step,Exception error) {
+                            string stage;
+                            switch(step)
+                            {
+                                case OwnedCleanupStep.CloseLease:stage="Close bridge injection lease";break;
+                                case OwnedCleanupStep.RestoreFlag:stage="Guardian restore diagnostic flag";break;
+                                case OwnedCleanupStep.VerifyFlag:stage="Guardian verify diagnostic flag absence";break;
+                                case OwnedCleanupStep.PublishRegistryProof:stage="Write guardian registry cleanup checkpoint";break;
+                                case OwnedCleanupStep.ReadFinalJournal:stage="Read final guardian journal";break;
+                                case OwnedCleanupStep.StopChild:stage="Guardian stop owned child";break;
+                                case OwnedCleanupStep.ReleaseOutput:stage="Guardian release owned shortcut";break;
+                                default:stage="Guardian stop owned trace";break;
+                            }
+                            errors.Add(ErrorText(stage,error));
+                        });
                     // An armed restart-required test remains conservative if
                     // the parent exited or its final journal is unreadable.
                     // The retained event survives lost journal/acknowledgement.
@@ -901,75 +919,72 @@ internal static class DailyGuard
             writeWindowEntered=writeStarted!=null && writeStarted.WaitOne(0);
             if(guardianExited)
             {
-                // A parent paused across the guardian deadline could have
-                // started its child after the guardian already stopped. Recheck
-                // our exact nonce/GUID trace and child independently; never rely
-                // on the guardian's earlier trace-absence snapshot.
-                // Stop the identified child before the final trace query so it
-                // cannot create its session after an earlier absence snapshot.
-                try { lock(gate) { journal.ParentChildQuiescenceConfirmed=EndOwnedChild(journal,errors); } }
-                catch(Exception error) { lock(gate) { errors.Add(ErrorText("Verify owned child teardown",error)); } }
-                try
-                {
-                    lock(gate)
-                    {
-                        string shortcutStatus;
-                        journal.ParentShortcutReleaseConfirmed=RecoverOwnedShortcutWithMutex(journal,journal.ParentChildQuiescenceConfirmed,errors,out shortcutStatus);
-                        journal.ParentShortcutRecoveryStatus=shortcutStatus;
-                    }
-                }
-                catch(Exception error) { lock(gate) { errors.Add(ErrorText("Verify owned shortcut release",error)); } }
-                try
-                {
-                    lock(gate)
-                    {
-                        // If the child never started, a guardian preflight
-                        // collision cannot belong to this run. Leave it alone.
-                        if(journal.ChildPid>0) journal.ParentTraceStopConfirmed=StopAcknowledgedTrace(journal,errors);
-                    }
-                }
-                catch(Exception error) { lock(gate) { errors.Add(ErrorText("Verify owned trace teardown",error)); } }
                 bool mayNeedRecovery=MayNeedRecovery(settingEnabled,writeWindowEntered,guardianState!=null && guardianState.WriteMayHaveOccurred);
-                if(guardianState!=null && guardianState.RegistryRestoreConfirmed)
+                Mutex recovery=null;bool ownsRecovery=false;
+                try
                 {
-                    restoration=guardianState.RestoreStatus;
-                }
-                else if(mayNeedRecovery)
-                {
-                    Mutex recovery=null;bool ownsRecovery=false;
                     try
                     {
                         recovery=new Mutex(false,MutexName);
                         try{ownsRecovery=recovery.WaitOne(0);}catch(AbandonedMutexException){ownsRecovery=true;}
-                        if(!ownsRecovery) throw new InvalidOperationException("Another guard owns the diagnostic setting; fallback left it untouched.");
-                        // Registry restoration is independent of every trace
-                        // and process recovery call once ownership is held.
-                        try { lock(gate) { journal.ParentChildQuiescenceConfirmed=EndOwnedChild(journal,errors); } }
-                        catch(Exception error) { lock(gate) { errors.Add(ErrorText("Fallback stop owned child",error)); } }
-                        try
-                        {
+                    }
+                    catch(Exception error) { lock(gate) { errors.Add(ErrorText("Acquire parent diagnostic-setting mutex",error)); } }
+                    if(!ownsRecovery) lock(gate) { errors.Add("Diagnostic-setting mutex ownership is unavailable; parent registry restoration was skipped. Exact owned child/trace cleanup will continue with the original output mutex safeguard."); }
+                    OwnedCleanupCoordinator.Parent(guardianExited,ownsRecovery,
+                        delegate {
+                            if(guardianState!=null && guardianState.RegistryRestoreConfirmed) restoration=guardianState.RestoreStatus;
+                            else if(mayNeedRecovery) restoration=RestoreExpectedValue(true);
+                        },
+                        delegate {
+                            registryRestored=RegistryValueAbsent();
+                            if(mayNeedRecovery && !registryRestored) lock(gate) { errors.Add("EtwLogSensitiveData is not absent after teardown; restoration is not confirmed."); }
+                            journal.ParentRegistryRestoreConfirmed=registryRestored;
+                        },
+                        delegate { lock(gate) { WriteJson(FileFor(nonce,".state.json"),journal); } },
+                        // A parent paused across the guardian deadline may have
+                        // launched a child after an earlier absence snapshot.
+                        // Recheck the exact owned child before the trace query.
+                        delegate { lock(gate) { journal.ParentChildQuiescenceConfirmed=EndOwnedChild(journal,errors); } },
+                        delegate {
                             lock(gate)
                             {
                                 string shortcutStatus;
                                 journal.ParentShortcutReleaseConfirmed=RecoverOwnedShortcut(journal,journal.ParentChildQuiescenceConfirmed,errors,out shortcutStatus);
                                 journal.ParentShortcutRecoveryStatus=shortcutStatus;
                             }
-                        }
-                        catch(Exception error) { lock(gate) { errors.Add(ErrorText("Fallback release owned shortcut",error)); } }
-                        try { lock(gate) { journal.ParentTraceStopConfirmed=StopAcknowledgedTrace(journal,errors); } }
-                        catch(Exception error) { lock(gate) { errors.Add(ErrorText("Fallback stop owned trace",error)); } }
-                        restoration=RestoreExpectedValue(true);
-                    }
-                    catch(Exception error) { lock(gate) { errors.Add(ErrorText("Parent fallback cleanup",error)); } }
-                    finally { if(ownsRecovery&&recovery!=null)recovery.ReleaseMutex();if(recovery!=null)recovery.Dispose(); }
+                        },
+                        delegate {
+                            lock(gate)
+                            {
+                                string shortcutStatus;
+                                journal.ParentShortcutReleaseConfirmed=RecoverOwnedShortcutWithMutex(journal,journal.ParentChildQuiescenceConfirmed,errors,out shortcutStatus);
+                                journal.ParentShortcutRecoveryStatus=shortcutStatus;
+                            }
+                        },
+                        delegate {
+                            lock(gate)
+                            {
+                                // An unstarted child's preflight collision is
+                                // not owned by this run. Leave it untouched.
+                                if(journal.ChildPid>0) journal.ParentTraceStopConfirmed=StopAcknowledgedTrace(journal,errors);
+                            }
+                        },
+                        delegate(OwnedCleanupStep step,Exception error) {
+                            string stage;
+                            switch(step)
+                            {
+                                case OwnedCleanupStep.RestoreFlag:stage="Parent fallback cleanup";break;
+                                case OwnedCleanupStep.VerifyFlag:stage="Verify final registry absence";break;
+                                case OwnedCleanupStep.PublishRegistryProof:stage="Write parent registry cleanup checkpoint";break;
+                                case OwnedCleanupStep.StopChild:stage="Verify owned child teardown";break;
+                                case OwnedCleanupStep.ReleaseOutput:stage="Verify owned shortcut release";break;
+                                default:stage="Verify owned trace teardown";break;
+                            }
+                            lock(gate) { errors.Add(ErrorText(stage,error)); }
+                        });
                 }
-                try
-                {
-                    registryRestored=RegistryValueAbsent();
-                    if(mayNeedRecovery && !registryRestored) lock(gate) { errors.Add("EtwLogSensitiveData is not absent after teardown; restoration is not confirmed."); }
-                    journal.ParentRegistryRestoreConfirmed=registryRestored;
-                }
-                catch(Exception error) { lock(gate) { errors.Add(ErrorText("Verify final registry absence",error)); } }
+                catch(Exception error) { lock(gate) { errors.Add(ErrorText("Parent fallback cleanup",error)); } }
+                finally { if(ownsRecovery&&recovery!=null)recovery.ReleaseMutex();if(recovery!=null)recovery.Dispose(); }
             }
             if(imageLock!=null) imageLock.Dispose();
             if(ready!=null) ready.Dispose(); if(arm!=null) arm.Dispose(); if(writeStarted!=null)writeStarted.Dispose(); if(refreshStarted!=null)refreshStarted.Dispose(); if(enabled!=null)enabled.Dispose(); if(done!=null) done.Dispose();
@@ -1041,6 +1056,21 @@ internal static class DailyGuard
         check(RestoreDecision(true,true,true,0)=="refuse-changed-value","Refuse changed DWORD0.");
         check(RestoreDecision(true,true,true,2)=="refuse-changed-value","Refuse changed DWORD2.");
         check(RestoreDecision(true,true,false,1)=="refuse-changed-value","Refuse non-DWORD value.");
+        int simulatedValue=2;bool simulatedAbsent=false;var cleanupStages=new List<OwnedCleanupStep>();
+        var changedValue=new InvalidOperationException("exact changed-value refusal");
+        OwnedCleanupCoordinator.Parent(true,true,
+            delegate {
+                if(RestoreDecision(true,true,true,simulatedValue)=="refuse-changed-value")throw changedValue;
+                simulatedValue=0;
+            },
+            delegate { simulatedAbsent=simulatedValue==0; },
+            delegate { },delegate { },delegate { },delegate { },delegate { },
+            delegate(OwnedCleanupStep step,Exception error) {
+                cleanupStages.Add(step);
+                check(object.ReferenceEquals(error,changedValue),"Production restore decision reaches the coordinator's reporter without replacing the exact error.");
+            });
+        check(simulatedValue==2&&!simulatedAbsent&&cleanupStages.Count==1&&cleanupStages[0]==OwnedCleanupStep.RestoreFlag,
+            "Ordering changes do not overwrite a foreign changed diagnostic value or invent absence proof.");
         check(!MayNeedRecovery(false,false,false),"An arm request without write evidence does not own a setting.");
         check(MayNeedRecovery(false,true,false),"Write-started event survives missing journal and absent enabled acknowledgement.");
         check(MayNeedRecovery(true,false,false),"Enabled acknowledgement proves a write window.");
@@ -1152,6 +1182,9 @@ internal static class DailyGuard
         known.ChildPid=7;known.ChildStartUtcTicks=8;known.BootUtcTicks=6;
         continuity=false;try{RequireJournalContinuity(registered,known);}catch(InvalidOperationException){continuity=true;}
         check(continuity,"Changed boot identity is refused before replacing recovery proof.");
+        int cleanupOrderTests=0;
+        try { errors.AddRange(OwnedCleanupCoordinator.RunSelfTests(out cleanupOrderTests)); }
+        catch(Exception error) { errors.Add("Pure cleanup ordering tests: "+error.Message); }
         int pathTests=0;string[] pathErrors=DailyPaths.RunSelfTests(out pathTests);errors.AddRange(pathErrors);
         int recoveryTests=0;
         try { errors.AddRange(OwnedBootRecovery.RunSelfTests(out recoveryTests)); }
@@ -1179,7 +1212,7 @@ internal static class DailyGuard
         catch(Exception error) { errors.Add("Pure display queue tests: "+error.Message); }
         check(IntPtr.Size==8 && Marshal.SizeOf(typeof(TraceProperties))==120,"x64 trace-control ABI.");
         check(Marshal.OffsetOf(typeof(TraceProperties),"WnodeFlags").ToInt32()==44,"Trace-control WNODE flags ABI.");
-        Console.WriteLine(Json(new{mode="self-test",status=errors.Count==0?"ok":"error",tests=cases,pathTests=pathTests,recoveryTests=recoveryTests,displayTests=displayTests,traceStarted=false,registryWritten=false,childStarted=false,injectionEnabled=false,nativeSendInputCalls=0,errors=errors}));
+        Console.WriteLine(Json(new{mode="self-test",status=errors.Count==0?"ok":"error",tests=cases,pathTests=pathTests,recoveryTests=recoveryTests,displayTests=displayTests,cleanupOrderTests=cleanupOrderTests,traceStarted=false,registryWritten=false,childStarted=false,injectionEnabled=false,nativeSendInputCalls=0,errors=errors}));
         return errors.Count==0?0:1;
     }
 

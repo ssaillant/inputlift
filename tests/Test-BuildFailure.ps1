@@ -80,7 +80,7 @@ foreach($mode in @('default','adapter','kanata')) {
     $fixture=Join-Path $fixtureRoot $mode
     New-FixtureDirectory $fixture
     Copy-Item -LiteralPath (Join-Path $repoRoot 'Build.ps1') -Destination (Join-Path $fixture 'Build.ps1')
-    foreach($directory in @('core','examples','package','kanata')) {
+    foreach($directory in @('core','examples','package','kanata','ephemeral-status')) {
         New-FixtureDirectory (Join-Path $fixture ('artifacts\'+$directory))
         $folder=Join-Path $fixture ('artifacts\'+$directory)
         Write-NewFixtureFile (Join-Path $folder 'self-test-results.json') $successMarker
@@ -90,6 +90,7 @@ foreach($mode in @('default','adapter','kanata')) {
     $examples=Join-Path $fixture 'artifacts\examples'
     $package=Join-Path $fixture 'artifacts\package'
     $kanata=Join-Path $fixture 'artifacts\kanata'
+    $ephemeral=Join-Path $fixture 'artifacts\ephemeral-status'
     Write-NewFixtureFile (Join-Path $core 'InputLift.Core.dll') $payloadMarker
     Write-NewFixtureFile (Join-Path $examples 'InputLift.Examples.exe') $payloadMarker
     Write-NewFixtureFile (Join-Path $package 'InputLift.exe') $payloadMarker
@@ -107,7 +108,10 @@ foreach($mode in @('default','adapter','kanata')) {
     $kanataSuccess=Join-Path $kanata 'self-test-results.json'
     if($mode -eq 'kanata') { Assert-Check (-not(Test-Path -LiteralPath $kanataSuccess)) 'Kanata failure invalidated its success report before core compilation.' }
     else { Assert-Check ([IO.File]::ReadAllText($kanataSuccess) -ceq $successMarker) "$mode failure left optional Kanata report unchanged." }
-    foreach($folder in @($core,$examples,$package,$kanata)) {
+    $statusSuccess=Join-Path $ephemeral 'self-test-results.json'
+    if($adapter) { Assert-Check (-not(Test-Path -LiteralPath $statusSuccess)) 'Runtime failure invalidated the status fixture report before core compilation.' }
+    else { Assert-Check ([IO.File]::ReadAllText($statusSuccess) -ceq $successMarker) "$mode failure left the optional status fixture report unchanged." }
+    foreach($folder in @($core,$examples,$package,$kanata,$ephemeral)) {
         Assert-Check ([IO.File]::ReadAllText((Join-Path $folder 'unrelated.txt')) -ceq $unrelatedMarker) "$mode preserved an unrelated file."
     }
     foreach($path in @((Join-Path $core 'InputLift.Core.dll'),(Join-Path $examples 'InputLift.Examples.exe'),(Join-Path $package 'InputLift.exe'),(Join-Path $kanata 'InputLift.Kanata.exe'))) {

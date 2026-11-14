@@ -44,8 +44,17 @@ The expanded suite passes locally and covers the actual JSON timestamp boundary,
 including UTC `DateTime` values, strict UTC-kind checks and freshness limits.
 Actual installed metadata/native authentication still needs deployment testing.
 
+The optional runtime also runs 113 injected checks against its production cleanup
+coordinator and 62 status-publication checks, including four Windows file-sharing
+fixtures in ignored workspace artifacts. Registry restoration precedes entry into
+owned child/output/trace teardown when setting ownership is held. Status retries
+are limited to replacement errors 32/33, nine attempts and a 200 ms retry window;
+an individual operating-system call can still block beyond that window. Deferred
+publication does not advance the watchdog's published progress. Durable ownership
+and consent journals retain their original fail-closed writer.
+
 The failure regression intentionally runs source-incomplete fixtures and verifies
-45 conditions: generated success reports are invalidated, an optional rebuild
+51 conditions: generated success reports are invalidated, an optional rebuild
 cannot leave an old installable manifest after failing early, unrelated optional
 outputs are preserved, and payload/unrelated sentinels remain unchanged. Its
 small diagnostic fixtures are retained under ignored `artifacts/readiness/` paths.

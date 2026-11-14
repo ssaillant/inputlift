@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Retry only transient status-file replacement conflicts within a short window;
+  preserve last-good snapshots and the progress watchdog when publication is deferred.
+- Attempt owned logging-flag restoration before child/output/trace teardown and
+  checkpoint partial registry proof. Parent registry fallback retains confirmed-exit
+  and mutex requirements; exact owned child/trace cleanup remains available under
+  a foreign setting owner. Incomplete cleanup remains stopped.
 - Keep Bluetooth acquisition and identification alive while Deskflow output is
   unavailable; release owned output and rearm after neutral without replaying a held press.
 - Move Deskflow discovery to one reusable background probe, with expiring

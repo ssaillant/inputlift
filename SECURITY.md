@@ -14,6 +14,18 @@ Removing the registry flag does not reliably disable logging already cached by t
 
 The logging-refresh request is undocumented and may change or block inside the driver. The implementation intentionally permits one tested Intel radio family and refuses ambiguous radio enumeration. Do not remove this restriction merely to try another device. A driver call cannot be guaranteed to complete within a bounded time; independent cleanup supervision reduces some failure consequences but cannot guarantee recovery from every kernel or power failure.
 
+During owned shutdown, the guardian signals the worker's injection lease, then
+attempts registry restoration and absence verification before reading the final
+journal or stopping the child, output and trace. It records a partial registry
+checkpoint when possible. Parent registry fallback still requires confirmed
+guardian exit, its existing state-file preflight and ownership of the diagnostic
+mutex. If another guard owns that mutex, registry restoration is skipped while
+the parent still attempts cleanup of the old identity-checked child/trace; output retains its
+separate mutex safeguard. Those preflight/file/registry calls can also block.
+Registry absence alone does not
+prove worker, output or trace cleanup, and does not clear the driver's cached
+logging state. Incomplete proof still prevents another capture from starting.
+
 ## Installation boundary
 
 Live executables run only from the fixed protected Program Files directory. Installation metadata, executable hashes, explicit logging consent, task identity and administrator-owned ACLs bind the deployment to one account and configured keyboard. Setup is create-only and never takes over an existing installation. The privileged task must not run code from a user-writable source/build directory.
