@@ -86,8 +86,10 @@ establish the updated candidate's CI result.
 The newer Deskflow recovery port has local build/policy/JSON validation only;
 that historical hosted run does not cover it. The public package's fresh
 installation, reboot path and forced live timeout recovery remain unvalidated.
-The local eight-case transport attempt was blocked by Windows loopback socket
-access errors, with dependent cases timing out. It is recorded as a failed
-validation attempt, not a pass; fresh hosted transport evidence is required.
+An initial eight-case transport attempt was blocked by Windows loopback socket
+access errors, with dependent cases timing out. After execution-network
+permission was granted, the unchanged source passed all eight owned-loopback
+checks locally. No real application or native input was involved. Fresh hosted
+transport evidence is still required for the source revision to be published.
 
 The renamed/generalized live capture package, a fresh privileged installation, reconnect behavior and additional device profiles remain unvalidated in this public version. Keep these limits in compatibility and release notes; do not publish stable end-user binaries on the strength of pure checks alone.
