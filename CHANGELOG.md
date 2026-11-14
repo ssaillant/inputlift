@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0-alpha.2
+
 - Add optional bounded countdown and hold timings for the synthetic Kanata demo,
   with supervised cancellation tests and a focused manual tester checklist.
 - Retry only transient status-file replacement conflicts within a short window;
@@ -18,8 +20,6 @@
   preserve explicit Stop, installation/consent identity and existing watchdog limits.
 - Add pure recovery and production JSON-boundary regressions. These behaviors
   are limited to `deskflow` mode; the core, event-only pipe and Kanata lifecycle remain separate.
-
-## 0.1.0-alpha.2
 
 - Add default read-only protected-state inspection and an explicit `-Connect`
   bridge launcher; session identifiers no longer need to be copied manually.
