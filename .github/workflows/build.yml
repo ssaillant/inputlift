@@ -29,7 +29,7 @@ jobs:
         run: ./evidence/kanata/Verify-Fixture.ps1
       - name: Verify owned loopback transport
         shell: pwsh
-        run: ./artifacts/kanata/InputLift.Kanata.exe --test-transport
+        run: ./tests/ci/Invoke-TransportChecks.ps1
       - name: Verify failed builds invalidate success artifacts
         shell: pwsh
         run: ./tests/Test-BuildFailure.ps1

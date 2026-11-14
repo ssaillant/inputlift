@@ -50,6 +50,13 @@ Compiler CS0649 warnings in JSON-deserialized runtime state classes are expected
 
 The GitHub workflow targets the Windows Server 2025 runner generation, uses a verified full checkout commit SHA, a read-only token and no persisted checkout credentials. It runs the same pure build/test modes and the failed-build regression. Runner-image updates still occur within that generation. Dependabot is configured to propose monthly action updates; updates are not automatically merged.
 
+Hosted Windows jobs start with an administrator token. The explicitly separate
+`tests/ci/Invoke-TransportChecks.ps1` stages two hash-verified files and runs all
+seven stub/process checks under a temporary standard account in the disposable
+GitHub-hosted VM. It removes the owned account/processes/staging afterward. It
+refuses ordinary workstations and self-hosted runners; never run it on a personal
+computer. Production companion and worker modes keep their normal-user guard.
+
 The original public source commit passed its hosted workflow. Changes must have
 their own hosted run; local success does not establish a candidate's CI result.
 
