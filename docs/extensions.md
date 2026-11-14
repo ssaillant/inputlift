@@ -60,7 +60,8 @@ Keep action consumers outside privileged capture processes. Do not add arbitrary
 | Button-based accessibility/action patterns | Synthetic hold/toggle consumers | Bind an approved action and validate real source/output behavior. |
 | Sliders, pressure or analog controls | Normalized event API + synthetic consumer | Implement a real source profile and calibration. |
 | Dials or relative controls | Step event API + synthetic consumer | Implement and test a real source. |
-| Diagnostic or application event streams | Synthetic JSON stdout demo | Design an actual acquisition/transport consumer if needed. |
+| Diagnostic or application event streams | Synthetic JSON stdout demo; experimental fixed Fn-only local pipe | General event transport remains separate design work. |
+| Kanata virtual-key output | Experimental unprivileged loopback companion | Complete real application and independent physical-source validation. |
 | Other KVMs or native input output | Core API is reusable | Implement routing, focus, ownership and release policies. |
 | Multi-axis motion or touch gestures | No dedicated model yet | Define units, grouping, lifecycle and report decoders. |
 

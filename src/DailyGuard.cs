@@ -91,6 +91,7 @@ internal static class DailyGuard
         public Journal() { }
         public string Nonce;
         public string SessionName;
+        public string OutputMode;
         public int ParentPid;
         public long ParentStartUtcTicks;
         public int TrayPid;
@@ -134,6 +135,7 @@ internal static class DailyGuard
     {
         internal string Address;
         internal string ExpectedHash;
+        internal string OutputMode;
         internal int TrayPid;
         internal long TrayStartUtcTicks;
     }
@@ -210,7 +212,8 @@ internal static class DailyGuard
     {
         if(current==null || known==null || current.Nonce!=known.Nonce || current.SessionName!=known.SessionName ||
             current.ParentPid!=known.ParentPid || current.ParentStartUtcTicks!=known.ParentStartUtcTicks ||
-            current.TrayPid!=known.TrayPid || current.TrayStartUtcTicks!=known.TrayStartUtcTicks || current.BootUtcTicks!=known.BootUtcTicks)
+            current.TrayPid!=known.TrayPid || current.TrayStartUtcTicks!=known.TrayStartUtcTicks || current.BootUtcTicks!=known.BootUtcTicks ||
+            DailyPaths.NormalizeOutputMode(current.OutputMode)!=DailyPaths.NormalizeOutputMode(known.OutputMode))
             throw new InvalidOperationException("Daily ownership identity changed during monitoring.");
         if(known.ChildPid>0 && (current.ChildPid!=known.ChildPid || current.ChildStartUtcTicks!=known.ChildStartUtcTicks))
             throw new InvalidOperationException("The registered worker identity changed or disappeared from its journal.");
@@ -256,6 +259,7 @@ internal static class DailyGuard
             string.IsNullOrEmpty(value.RadioInterfacePath) || string.IsNullOrEmpty(value.RadioInstanceId) ||
             value.TrayPid<=0 || value.TrayStartUtcTicks<=0 || value.BootUtcTicks<=0)
             throw new InvalidOperationException("Test journal identity or baseline is invalid.");
+        DailyPaths.NormalizeOutputMode(value.OutputMode);
         return value;
     }
 
@@ -434,6 +438,14 @@ internal static class DailyGuard
         try
         {
             if(!childQuiesced) { status="refuse-running-child"; errors.Add("Shortcut recovery refused: owned child quiescence is not confirmed."); return false; }
+            if(DailyPaths.NormalizeOutputMode(state.OutputMode)=="events-only")
+            {
+                // This producer never creates native output. EOF/heartbeat loss
+                // is handled by the unprivileged consumer's independent guard.
+                // This is not proof that a third-party consumer released keys.
+                status="event-only-producer-quiescent-no-native-output";
+                return true;
+            }
             string path=FileFor(state.Nonce,".shortcut.json");
             if(!File.Exists(path))
             {
@@ -503,8 +515,9 @@ internal static class DailyGuard
     }
     private static LiveOptions ParseLive(string[] args)
     {
-        if(args.Length!=9 || args[0]!="--run-daily" || args[1]!="--keyboard-address" ||
-            args[3]!="--expected-probe-sha256" || args[5]!="--tray-pid" || args[7]!="--tray-start")
+        if((args.Length!=9 && args.Length!=11) || args[0]!="--run-daily" || args[1]!="--keyboard-address" ||
+            args[3]!="--expected-probe-sha256" || args[5]!="--tray-pid" || args[7]!="--tray-start" ||
+            (args.Length==11 && args[9]!="--output-mode"))
             throw new ArgumentException("Use the installed tray controller to start the approved daily helper.");
         if(!DailyPaths.ValidKeyboardAddress(args[2]) || !Regex.IsMatch(args[4],@"\A[0-9a-fA-F]{64}\z"))
             throw new ArgumentException("Keyboard address or capture SHA-256 format is invalid.");
@@ -512,7 +525,8 @@ internal static class DailyGuard
         if(!int.TryParse(args[6],out pid) || pid<=0 ||
             !long.TryParse(args[8],out ticks) || ticks<=0)
             throw new ArgumentException("Tray identity is invalid.");
-        return new LiveOptions { Address=args[2].ToUpperInvariant(),ExpectedHash=args[4].ToUpperInvariant(),
+        string mode=args.Length==11 ? DailyPaths.NormalizeOutputMode(args[10]) : "deskflow";
+        return new LiveOptions { Address=args[2].ToUpperInvariant(),ExpectedHash=args[4].ToUpperInvariant(),OutputMode=mode,
             TrayPid=pid,TrayStartUtcTicks=ticks };
     }
     private static string Hash(Stream stream)
@@ -684,7 +698,7 @@ internal static class DailyGuard
         string nonce=Guid.NewGuid().ToString("N");
         string ownImage=Process.GetCurrentProcess().MainModule.FileName;
         string childImage=DailyPaths.CodeFile("InputLiftCapture.exe");
-        Journal journal=new Journal { Nonce=nonce, SessionName=SessionPrefix+nonce,
+        Journal journal=new Journal { Nonce=nonce, SessionName=SessionPrefix+nonce,OutputMode=options.OutputMode,
             ParentPid=Process.GetCurrentProcess().Id, ParentStartUtcTicks=StartTicks(Process.GetCurrentProcess()),
             TrayPid=options.TrayPid,TrayStartUtcTicks=options.TrayStartUtcTicks };
         Process child=null, guardian=null;
@@ -710,6 +724,7 @@ internal static class DailyGuard
             RequireAdministrator();
             DailyPaths.RequireInstalledCodePaths();
             DailyPaths.RequireConfiguredKeyboard(options.Address);
+            DailyPaths.RequireConfiguredOutputMode(options.OutputMode);
             if(!ProcessMatches(options.TrayPid,options.TrayStartUtcTicks,DailyPaths.CodeFile("InputLift.exe")))
                 throw new InvalidOperationException("The installed tray PID/start/image does not match the launch request.");
             journal.BootUtcTicks=QueryBootUtcTicks(); // Before any sensitive flag or guardian exists.
@@ -774,7 +789,7 @@ internal static class DailyGuard
                 WriteJson(FileFor(nonce,".state.json"),journal);
             }
             CheckStartupLease(done,options,guardian);
-            string childArgs="--run-daily --keyboard-address "+options.Address+" --session-name "+journal.SessionName;
+            string childArgs="--run-daily --keyboard-address "+options.Address+" --session-name "+journal.SessionName+" --output-mode "+options.OutputMode;
             child=new Process { StartInfo=new ProcessStartInfo(childImage,childArgs) {
                 UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true } };
             child.OutputDataReceived += delegate(object sender,DataReceivedEventArgs e)
@@ -1090,6 +1105,15 @@ internal static class DailyGuard
         string[] valid={"--run-daily","--keyboard-address","001122334455","--expected-probe-sha256",hash,"--tray-pid","123","--tray-start","456"};
         try { LiveOptions p=ParseLive(valid);check(p.Address=="001122334455"&&p.ExpectedHash==hash&&p.TrayPid==123&&p.TrayStartUtcTicks==456,"Daily invocation validates its synthetic keyboard and tray identity."); }
         catch(Exception e){check(false,"Daily argument parser: "+e.Message);}
+        string[] eventArgs={"--run-daily","--keyboard-address","001122334455","--expected-probe-sha256",hash,"--tray-pid","123","--tray-start","456","--output-mode","events-only"};
+        check(ParseLive(valid).OutputMode=="deskflow" && ParseLive(eventArgs).OutputMode=="events-only","Event-only is an explicit launch mode; legacy invocation remains Deskflow.");
+        foreach(string invalidMode in new[]{"","Events-Only","mouse5","arbitrary-action"})
+        { string[] invalid=(string[])eventArgs.Clone();invalid[10]=invalidMode;bool refused=false;try{ParseLive(invalid);}catch(ArgumentException){refused=true;}check(refused,"Unknown output mode refused before any privileged operation."); }
+        List<string> eventCleanupErrors=new List<string>();string eventCleanupStatus;
+        check(RecoverOwnedShortcut(new Journal { OutputMode="events-only" },true,eventCleanupErrors,out eventCleanupStatus) &&
+            eventCleanupErrors.Count==0 && eventCleanupStatus=="event-only-producer-quiescent-no-native-output","Quiescent event-only producer cleanup performs no native input or shortcut-journal read.");
+        check(!RecoverOwnedShortcut(new Journal { OutputMode="events-only" },false,eventCleanupErrors,out eventCleanupStatus) &&
+            eventCleanupStatus=="refuse-running-child","Event-only cleanup still requires authoritative producer quiescence.");
         foreach(int index in new[]{0,2,4,6,8})
         { string[] invalid=(string[])valid.Clone();invalid[index]="bad";bool refused=false;try{ParseLive(invalid);}catch(ArgumentException){refused=true;}check(refused,"Invalid daily argument refused before live work."); }
         ProgressWatch progress=new ProgressWatch();

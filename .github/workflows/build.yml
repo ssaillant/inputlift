@@ -21,6 +21,15 @@ jobs:
       - name: Build and test optional Deskflow integration
         shell: pwsh
         run: ./Build.ps1 -IncludeDeskflowAdapter
+      - name: Build and test optional Kanata companion
+        shell: pwsh
+        run: ./Build.ps1 -IncludeKanataAdapter
+      - name: Verify synthetic packet evidence
+        shell: pwsh
+        run: ./evidence/kanata/Verify-Fixture.ps1
+      - name: Verify owned loopback transport
+        shell: pwsh
+        run: ./artifacts/kanata/InputLift.Kanata.exe --test-transport
       - name: Verify failed builds invalidate success artifacts
         shell: pwsh
         run: ./tests/Test-BuildFailure.ps1

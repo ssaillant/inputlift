@@ -1,0 +1,10 @@
+;; InputLift example: a dedicated virtual key holds the lifted layer.
+;; Base: A -> A. While inputlift-fn is held: A -> B.
+;; Do not share inputlift-fn with other command clients or physical bindings.
+;; Validate first: kanata --check --cfg held-layer.kbd
+;; Live opt-in: kanata --cfg held-layer.kbd --port 127.0.0.1:7070
+(defcfg process-unmapped-keys no)
+(defsrc a)
+(deflayer base a)
+(deflayer lifted b)
+(defvirtualkeys inputlift-fn (layer-while-held lifted))

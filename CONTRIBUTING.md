@@ -4,6 +4,11 @@ Useful contributions include hardware compatibility reports, pure decoder tests,
 
 Run `./Build.ps1` to build and test the independent core. Run `./Build.ps1 -IncludeDeskflowAdapter` for changes to the optional Windows x64 runtime or integration. Both run pure checks without starting capture or injecting input. Do not add hardware tests, driver calls or privileged settings changes to normal builds or CI. Mark interactive tests explicitly and explain their side effects before anyone runs them.
 
+For Kanata changes, run `./Build.ps1 -IncludeKanataAdapter` and the synthetic
+packet evidence verifier. The separately invoked `--test-transport` mode talks
+only to an owned loopback stub; normal self-tests create no sockets. Real Kanata
+and physical-source tests require explicit opt-in and distinct result labels.
+
 Preserve the installation ownership checks, administrator-only write boundary, explicit logging consent, radio restrictions, bounded parsing and independent cleanup supervision. Broadening supported hardware requires reviewed evidence and an opt-in test plan, not just a changed VID/PID constant.
 
 Use synthetic protocol fixtures. Never commit captured Bluetooth traffic, typed content, real keyboard addresses, user SIDs, machine paths, certificates, secrets or personal configuration. Share product IDs rather than individual identifiers.

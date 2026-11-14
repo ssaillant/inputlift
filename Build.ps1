@@ -2,16 +2,19 @@
 # SPDX-License-Identifier: MIT
 # Default: pure core library/tests and synthetic examples. Optional adapter build remains inert.
 [CmdletBinding()]
-param([switch]$IncludeDeskflowAdapter)
+param([switch]$IncludeDeskflowAdapter,[switch]$IncludeWindowsCapture,[switch]$IncludeKanataAdapter)
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $repoRoot=[IO.Path]::GetFullPath($PSScriptRoot)
 $sourceRoot=Join-Path $repoRoot 'src'
 $coreRoot=Join-Path $repoRoot 'core'
 $examplesRoot=Join-Path $repoRoot 'examples'
+$kanataRoot=Join-Path $repoRoot 'integrations\kanata'
 $coreBuildRoot=Join-Path $repoRoot 'artifacts\core'
 $examplesBuildRoot=Join-Path $repoRoot 'artifacts\examples'
+$kanataBuildRoot=Join-Path $repoRoot 'artifacts\kanata'
 $packageRoot=Join-Path $repoRoot 'artifacts\package'
+$buildRuntime=$IncludeDeskflowAdapter -or $IncludeWindowsCapture
 function Assert-NoReparse([string]$Path) {
     $probe=[IO.Path]::GetFullPath($Path)
     while($probe) {
@@ -73,10 +76,11 @@ $staleSuccessPaths=@(
     (Join-Path $coreBuildRoot 'self-test-results.json'),
     (Join-Path $examplesBuildRoot 'self-test-results.json')
 )
-if($IncludeDeskflowAdapter) {
+if($buildRuntime) {
     $staleSuccessPaths+=(Join-Path $packageRoot 'package.json')
     $staleSuccessPaths+=(Join-Path $packageRoot 'self-test-results.json')
 }
+if($IncludeKanataAdapter) { $staleSuccessPaths+=(Join-Path $kanataBuildRoot 'self-test-results.json') }
 $artifactRoot=[IO.Path]::GetFullPath((Join-Path $repoRoot 'artifacts')).TrimEnd([IO.Path]::DirectorySeparatorChar)
 foreach($path in $staleSuccessPaths) {
     $resolved=[IO.Path]::GetFullPath($path)
@@ -106,11 +110,24 @@ Build-Target $examplesBuildRoot 'InputLift.Examples.exe' 'exe' 'anycpu' $example
 $examplesReport=Run-PureTests $examplesBuildRoot 'InputLift.Examples.exe'
 [IO.File]::WriteAllText((Join-Path $examplesBuildRoot 'self-test-results.json'),($examplesReport|ConvertTo-Json -Depth 10),$encoding)
 $adapterReports=@(); $payload=@(); $manifestHash=$null
-if($IncludeDeskflowAdapter) {
+$kanataReport=$null
+if($IncludeKanataAdapter) {
+    Initialize-BuildDirectory $kanataBuildRoot
+    $kanataCoreLibrary=Join-Path $kanataBuildRoot 'InputLift.Core.dll'
+    Assert-NoReparse $kanataCoreLibrary
+    Copy-Item -LiteralPath $coreLibrary -Destination $kanataCoreLibrary -Force
+    Assert-NoReparse $kanataRoot
+    $kanataSources=@(Get-ChildItem -LiteralPath $kanataRoot -Filter '*.cs' -File | Sort-Object Name | ForEach-Object { $_.FullName })
+    if($kanataSources.Count -eq 0) { throw 'Kanata adapter sources are missing.' }
+    Build-Target $kanataBuildRoot 'InputLift.Kanata.exe' 'exe' 'anycpu' $kanataSources @($coreLibrary,'System.Web.Extensions.dll')
+    $kanataReport=Run-PureTests $kanataBuildRoot 'InputLift.Kanata.exe'
+    [IO.File]::WriteAllText((Join-Path $kanataBuildRoot 'self-test-results.json'),($kanataReport|ConvertTo-Json -Depth 10),$encoding)
+}
+if($buildRuntime) {
     Initialize-BuildDirectory $packageRoot
     & (Join-Path $repoRoot 'tests\Test-SetupValidation.ps1')
     $shared=@(Source-Paths @('DailyPaths.cs','NativeSearchPolicy.cs'))
-    $capture=@(Source-Paths @('DailyCapture.cs','GlobeShortcutRelay.cs','OwnedMouseOutput.cs','DeskflowRouteGate.cs','BridgeOwnership.cs','GlobePacketDecoder.cs','GlobePacketDecoderTests.cs','BoundedConsoleWriter.cs','ConnectionHeaderDiagnostics.cs','CaptureContinuity.cs','KeyboardLinkState.cs','ReconnectGuide.cs'))
+    $capture=@(Source-Paths @('DailyCapture.cs','FnEventPipe.cs','GlobeShortcutRelay.cs','OwnedMouseOutput.cs','DeskflowRouteGate.cs','BridgeOwnership.cs','GlobePacketDecoder.cs','GlobePacketDecoderTests.cs','BoundedConsoleWriter.cs','ConnectionHeaderDiagnostics.cs','CaptureContinuity.cs','KeyboardLinkState.cs','ReconnectGuide.cs'))
     $guard=@(Source-Paths @('DailyGuard.cs','BluetoothLoggingRefresh.cs','GlobeShortcutRelay.cs','OwnedMouseOutput.cs','DeskflowRouteGate.cs','BoundedConsoleWriter.cs','OwnedBootRecovery.cs'))
     $tray=@(Source-Paths @('InputLift.cs'))
     Build-Target $packageRoot 'InputLiftCapture.exe' 'exe' 'x64' ($capture+$shared) @('System.Web.Extensions.dll','System.Management.dll')
@@ -129,6 +146,7 @@ if($IncludeDeskflowAdapter) {
 [pscustomobject]@{
     Build='ok';CoreLibrary=$coreLibrary;CoreReport=$coreReport.Report
     ExamplesExecutable=(Join-Path $examplesBuildRoot 'InputLift.Examples.exe');ExamplesReport=$examplesReport.Report
-    DeskflowAdapterBuilt=[bool]$IncludeDeskflowAdapter;PackageManifestSha256=$manifestHash;Payload=$payload
+    WindowsCaptureBuilt=[bool]$buildRuntime;DeskflowAdapterBuilt=[bool]$buildRuntime;PackageManifestSha256=$manifestHash;Payload=$payload
+    KanataAdapterBuilt=[bool]$IncludeKanataAdapter;KanataReport=$(if($null -ne $kanataReport){$kanataReport.Report}else{$null})
     Installed=$false;LiveCaptureStarted=$false;NativeInputSent=$false
 }|ConvertTo-Json -Depth 7

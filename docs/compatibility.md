@@ -10,7 +10,8 @@ The generic event API and synthetic examples do not imply additional device supp
 | Transport/profile | Bluetooth classic HID. Wired input and other report variants are unvalidated. |
 | Live acquisition backend | Optional Windows x64 diagnostics backend, with privileged logging/refresh requirements. |
 | Live backend radio | One present Intel USB Bluetooth radio, VID `8087` / PID `0AAA`. Deliberate allowlist. |
-| Included live output | Marked Mouse 5 via the Deskflow Windows-server adapter. Other KVMs/output adapters are not implemented. |
+| Included outputs | Marked Mouse 5 via Deskflow; experimental event-only Fn pipe and Kanata companion. Other KVM adapters are not implemented. |
+| Kanata target | Protocol 1, initial reference v1.12.0; official configuration check and synthetic base/lifted/base layer lifecycle pass locally. Physical typing, installed event-only source and independent validation remain pending. |
 | Deskflow assumptions | Version 1.27 integration conventions; daemon enabled and Always run as system off. |
 | Release validation | Compilation and pure tests checked. Generalized runtime installation/live execution remain unvalidated. |
 

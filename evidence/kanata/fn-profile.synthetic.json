@@ -1,0 +1,359 @@
+{
+  "schemaVersion": 1,
+  "synthetic": true,
+  "purpose": "Public FnDecoder portability evidence; not captured traffic or a live integration test.",
+  "selector": "102030405060",
+  "packetKinds": {
+    "HciEvent": 2,
+    "ReceivedAcl": 3,
+    "SentAcl": 4
+  },
+  "timestampUnit": "opaque deterministic fixture ticks",
+  "profile": "vendor-ff01-usage3",
+  "ordinaryReportIndicesNeverRead": [
+    10,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17
+  ],
+  "provenance": [
+    "core/CoreTests.cs: Connection, Acl, Report, Ready, reset/disconnect tests",
+    "src/GlobePacketDecoderTests.cs: synthetic packet builders and ordinary-key reader guards"
+  ],
+  "setup": [
+    {
+      "id": "connection-complete",
+      "operation": "packet",
+      "kind": "HciEvent",
+      "timestamp": 1,
+      "packetHex": "03 0B 00 23 01 60 50 40 30 20 10 01 00",
+      "expectedTransitions": [],
+      "expectedReasons": [],
+      "expectedState": {
+        "connectionBound": true,
+        "bound": false,
+        "pressed": false
+      }
+    },
+    {
+      "id": "interrupt-channel-request",
+      "operation": "packet",
+      "kind": "SentAcl",
+      "timestamp": 2,
+      "packetHex": "23 01 0C 00 08 00 01 00 02 09 04 00 13 00 40 00",
+      "expectedTransitions": [],
+      "expectedReasons": [],
+      "expectedState": {
+        "connectionBound": true,
+        "bound": false,
+        "pressed": false
+      }
+    },
+    {
+      "id": "interrupt-channel-response",
+      "operation": "packet",
+      "kind": "ReceivedAcl",
+      "timestamp": 3,
+      "packetHex": "23 21 10 00 0C 00 01 00 03 09 08 00 41 00 40 00 00 00 00 00",
+      "expectedTransitions": [],
+      "expectedReasons": [],
+      "expectedState": {
+        "connectionBound": true,
+        "bound": true,
+        "pressed": false
+      }
+    },
+    {
+      "id": "released-baseline",
+      "operation": "packet",
+      "kind": "ReceivedAcl",
+      "timestamp": 4,
+      "packetHex": "23 21 0F 00 0B 00 40 00 A1 01 00 00 00 00 00 00 00 00 00",
+      "expectedTransitions": [],
+      "expectedReasons": [],
+      "expectedState": {
+        "connectionBound": true,
+        "bound": true,
+        "pressed": false
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "press-release-deduplication",
+      "steps": [
+        {
+          "id": "press",
+          "operation": "packet",
+          "kind": "ReceivedAcl",
+          "timestamp": 10,
+          "packetHex": "23 21 0F 00 0B 00 40 00 A1 01 00 00 00 00 00 00 00 00 02",
+          "expectedTransitions": [
+            "Pressed"
+          ],
+          "expectedReasons": [
+            "globe-down"
+          ],
+          "expectedState": {
+            "connectionBound": true,
+            "bound": true,
+            "pressed": true
+          }
+        },
+        {
+          "id": "duplicate-held-report",
+          "operation": "packet",
+          "kind": "ReceivedAcl",
+          "timestamp": 11,
+          "packetHex": "23 21 0F 00 0B 00 40 00 A1 01 00 00 00 00 00 00 00 00 02",
+          "expectedTransitions": [],
+          "expectedReasons": [],
+          "expectedState": {
+            "connectionBound": true,
+            "bound": true,
+            "pressed": true
+          }
+        },
+        {
+          "id": "release",
+          "operation": "packet",
+          "kind": "ReceivedAcl",
+          "timestamp": 12,
+          "packetHex": "23 21 0F 00 0B 00 40 00 A1 01 00 00 00 00 00 00 00 00 00",
+          "expectedTransitions": [
+            "Released"
+          ],
+          "expectedReasons": [
+            "globe-up"
+          ],
+          "expectedState": {
+            "connectionBound": true,
+            "bound": true,
+            "pressed": false
+          }
+        },
+        {
+          "id": "duplicate-released-report",
+          "operation": "packet",
+          "kind": "ReceivedAcl",
+          "timestamp": 13,
+          "packetHex": "23 21 0F 00 0B 00 40 00 A1 01 00 00 00 00 00 00 00 00 00",
+          "expectedTransitions": [],
+          "expectedReasons": [],
+          "expectedState": {
+            "connectionBound": true,
+            "bound": true,
+            "pressed": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "event-loss-while-held",
+      "steps": [
+        {
+          "id": "press",
+          "operation": "packet",
+          "kind": "ReceivedAcl",
+          "timestamp": 10,
+          "packetHex": "23 21 0F 00 0B 00 40 00 A1 01 00 00 00 00 00 00 00 00 02",
+          "expectedTransitions": [
+            "Pressed"
+          ],
+          "expectedReasons": [
+            "globe-down"
+          ],
+          "expectedState": {
+            "connectionBound": true,
+            "bound": true,
+            "pressed": true
+          }
+        },
+        {
+          "id": "explicit-reset",
+          "operation": "reset",
+          "timestamp": 11,
+          "expectedTransitions": [
+            "Released",
+            "Reset"
+          ],
+          "expectedReasons": [
+            "external-reset",
+            "external-reset"
+          ],
+          "expectedState": {
+            "connectionBound": false,
+            "bound": false,
+            "pressed": false
+          }
+        },
+        {
+          "id": "stale-report-after-reset",
+          "operation": "packet",
+          "kind": "ReceivedAcl",
+          "timestamp": 12,
+          "packetHex": "23 21 0F 00 0B 00 40 00 A1 01 00 00 00 00 00 00 00 00 02",
+          "expectedTransitions": [],
+          "expectedReasons": [],
+          "expectedState": {
+            "connectionBound": false,
+            "bound": false,
+            "pressed": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "held-disconnect-and-reacquire",
+      "steps": [
+        {
+          "id": "press",
+          "operation": "packet",
+          "kind": "ReceivedAcl",
+          "timestamp": 10,
+          "packetHex": "23 21 0F 00 0B 00 40 00 A1 01 00 00 00 00 00 00 00 00 02",
+          "expectedTransitions": [
+            "Pressed"
+          ],
+          "expectedReasons": [
+            "globe-down"
+          ],
+          "expectedState": {
+            "connectionBound": true,
+            "bound": true,
+            "pressed": true
+          }
+        },
+        {
+          "id": "disconnect",
+          "operation": "packet",
+          "kind": "HciEvent",
+          "timestamp": 11,
+          "packetHex": "05 04 00 23 01 13",
+          "expectedTransitions": [
+            "Released",
+            "Reset"
+          ],
+          "expectedReasons": [
+            "disconnect",
+            "binding-invalidated"
+          ],
+          "expectedState": {
+            "connectionBound": false,
+            "bound": false,
+            "pressed": false
+          }
+        },
+        {
+          "id": "stale-report-after-disconnect",
+          "operation": "packet",
+          "kind": "ReceivedAcl",
+          "timestamp": 12,
+          "packetHex": "23 21 0F 00 0B 00 40 00 A1 01 00 00 00 00 00 00 00 00 02",
+          "expectedTransitions": [],
+          "expectedReasons": [],
+          "expectedState": {
+            "connectionBound": false,
+            "bound": false,
+            "pressed": false
+          }
+        },
+        {
+          "id": "new-connection",
+          "operation": "packet",
+          "kind": "HciEvent",
+          "timestamp": 13,
+          "packetHex": "03 0B 00 23 01 60 50 40 30 20 10 01 00",
+          "expectedTransitions": [],
+          "expectedReasons": [],
+          "expectedState": {
+            "connectionBound": true,
+            "bound": false,
+            "pressed": false
+          }
+        },
+        {
+          "id": "new-interrupt-request",
+          "operation": "packet",
+          "kind": "SentAcl",
+          "timestamp": 14,
+          "packetHex": "23 01 0C 00 08 00 01 00 02 09 04 00 13 00 40 00",
+          "expectedTransitions": [],
+          "expectedReasons": [],
+          "expectedState": {
+            "connectionBound": true,
+            "bound": false,
+            "pressed": false
+          }
+        },
+        {
+          "id": "new-interrupt-response",
+          "operation": "packet",
+          "kind": "ReceivedAcl",
+          "timestamp": 15,
+          "packetHex": "23 21 10 00 0C 00 01 00 03 09 08 00 41 00 40 00 00 00 00 00",
+          "expectedTransitions": [],
+          "expectedReasons": [],
+          "expectedState": {
+            "connectionBound": true,
+            "bound": true,
+            "pressed": false
+          }
+        },
+        {
+          "id": "new-released-baseline",
+          "operation": "packet",
+          "kind": "ReceivedAcl",
+          "timestamp": 16,
+          "packetHex": "23 21 0F 00 0B 00 40 00 A1 01 00 00 00 00 00 00 00 00 00",
+          "expectedTransitions": [],
+          "expectedReasons": [],
+          "expectedState": {
+            "connectionBound": true,
+            "bound": true,
+            "pressed": false
+          }
+        },
+        {
+          "id": "new-press",
+          "operation": "packet",
+          "kind": "ReceivedAcl",
+          "timestamp": 17,
+          "packetHex": "23 21 0F 00 0B 00 40 00 A1 01 00 00 00 00 00 00 00 00 02",
+          "expectedTransitions": [
+            "Pressed"
+          ],
+          "expectedReasons": [
+            "globe-down"
+          ],
+          "expectedState": {
+            "connectionBound": true,
+            "bound": true,
+            "pressed": true
+          }
+        },
+        {
+          "id": "new-release",
+          "operation": "packet",
+          "kind": "ReceivedAcl",
+          "timestamp": 18,
+          "packetHex": "23 21 0F 00 0B 00 40 00 A1 01 00 00 00 00 00 00 00 00 00",
+          "expectedTransitions": [
+            "Released"
+          ],
+          "expectedReasons": [
+            "globe-up"
+          ],
+          "expectedState": {
+            "connectionBound": true,
+            "bound": true,
+            "pressed": false
+          }
+        }
+      ]
+    }
+  ]
+}

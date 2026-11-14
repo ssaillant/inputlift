@@ -174,6 +174,8 @@ internal static class GlobeEtwFnProbe
         private readonly Stopwatch elapsed = new Stopwatch();
         private GlobeShortcutRelay relay;
         private OwnedMouseOutput mouseOutput;
+        private FnEventPipe eventPipe;
+        private readonly string outputMode;
         private BridgeOwnership ownership;
         private bool neutralReady;
         private long retiredDowns,retiredPairs,physicalDownCount,progressSequence,lastStatusMilliseconds=-1000;
@@ -196,13 +198,14 @@ internal static class GlobeEtwFnProbe
         private uint processTraceResult, eventsLost, buffersLost;
         private long flushQueries, flushAttempts, flushSuccesses, flushFailures, flushMaxControlMilliseconds;
 
-        internal Probe(byte[] target, string requestedSessionName)
+        internal Probe(byte[] target, string requestedSessionName,string requestedOutputMode)
         {
             decoder = new HciGlobeDecoder(target);
             connectionDiagnostics = new ConnectionHeaderDiagnostics(target);
             notifications = new BoundedConsoleWriter("GlobeRelay keyboard notification");
             callback = OnEvent;
             sessionName = requestedSessionName ?? (SessionPrefix + Guid.NewGuid().ToString("N"));
+            outputMode=DailyPaths.NormalizeOutputMode(requestedOutputMode);
         }
 
         private void Fail(string stage, uint code)
@@ -224,6 +227,7 @@ internal static class GlobeEtwFnProbe
         // Every caller holds gate; Fail can re-enter this lock on the same thread.
         private void AbortShortcut(string reason)
         {
+            if(eventPipe!=null) { eventPipe.SetNeutral(false);eventPipe.Publish("reset",false); }
             if(relay==null) return;
             try { relay.Abort(reason); }
             catch(Exception error)
@@ -237,6 +241,13 @@ internal static class GlobeEtwFnProbe
 
         private void ResetRelayAfterNeutral()
         {
+            if(outputMode=="events-only")
+            {
+                // Publish the baseline before a fast following down. Merely
+                // setting the periodic-heartbeat snapshot can lose this order.
+                if(eventPipe!=null)eventPipe.Publish("heartbeat",true);
+                return;
+            }
             if(relay!=null)
             {
                 if(relay.ChordMayBeDown || relay.JournalArmed)
@@ -261,11 +272,12 @@ internal static class GlobeEtwFnProbe
                 string reconnectState=null;
                 if(!failed && !cleaned)
                     reconnectState=reconnectGuide.Observe(decoder.Bound || KeyboardConnectionState.ReadConnected(),now,decoder.Bound);
-                string state=failed ? "Error" : cleaned ? "Stopped" : !decoder.Bound ? reconnectState :
-                    !neutralReady ? "AwaitNeutral" : mouseOutput!=null && mouseOutput.CanStartPress ? "Ready" : "PausedOnHost";
+                string state=failed ? "Error" : cleaned ? "Stopped" : outputMode=="events-only" && (eventPipe==null || !eventPipe.Connected) ? "AwaitConsumer" : !decoder.Bound ? reconnectState :
+                    !neutralReady ? "AwaitNeutral" : outputMode=="events-only" ? "EventsReady" : mouseOutput!=null && mouseOutput.CanStartPress ? "Ready" : "PausedOnHost";
                 string error=failures.Count==0 ? null : failures[failures.Count-1].Stage+": "+failures[failures.Count-1].Message;
                 var current=relay==null ? null : relay.Snapshot();
                 status=new { Nonce=SessionGuid(sessionName).ToString("N"),WorkerPid=workerPid,WorkerStartUtcTicks=workerStart,
+                    OutputMode=outputMode,PipeName=eventPipe==null?null:eventPipe.Name,
                     ProgressSequence=++progressSequence,State=state,Error=error,
                     PhysicalGlobePresses=physicalDownCount,OutputPresses=retiredDowns+(current==null?0:current.ChordsStarted),
                     OutputPairs=retiredPairs+(current==null?0:current.ChordsReleased),KeyboardBound=decoder.Bound,
@@ -284,6 +296,11 @@ internal static class GlobeEtwFnProbe
         // connection headers cannot resurrect a pre-suspend identity binding.
         private void CheckContinuity()
         {
+            if(eventPipe!=null)
+            {
+                if(eventPipe.Failure!=null) { Fail("FnEventPipe",0,eventPipe.Failure);return; }
+                if(eventPipe.TakeConnectionReset()) { neutralReady=false;eventPipe.SetNeutral(false); }
+            }
             bool clockGap=continuity.Sample();
             bool notified=Interlocked.Exchange(ref suspendResetPending,0)!=0;
             if(!clockGap && !notified) return;
@@ -306,14 +323,16 @@ internal static class GlobeEtwFnProbe
                 if(reset || (edge.Reason!="globe-down" && edge.Reason!="globe-up"))
                 { AbortShortcut("target-reset-or-disconnect"); neutralReady=false; continue; }
                 if(edge.Down) physicalDownCount++;
-                if(relay==null || !neutralReady) continue;
+                if((relay==null && eventPipe==null) || !neutralReady) continue;
                 if(edge.Down)
                 {
                     if(stopRequested.WaitOne(0) || failed || cleaned) { AbortShortcut("capture-stopping"); continue; }
                     if(ownership.LeaseEnded) { AbortShortcut("lease-ended"); stopRequested.Set(); return; }
                     if(delivered-edge.Timestamp>5000000L) { staleDownsIgnored++; continue; }
-                    relay.OnGlobeDown();
+                    if(eventPipe!=null) { ownership.RequireActiveLease();eventPipe.Publish("down",false); }
+                    else relay.OnGlobeDown();
                 }
+                else if(eventPipe!=null)eventPipe.Publish("up",true);
                 else relay.OnGlobeUp();
             }
         }
@@ -365,7 +384,10 @@ internal static class GlobeEtwFnProbe
                     if(SourceEpochChanged(previouslyBound,decoder.Bound,previousChannelEpoch,decoder.BoundChannelCount))
                     { AbortShortcut("keyboard-channel-changed"); neutralReady=false; keyboardAnnounced=false; }
                     if(decoder.Bound && !neutralReady && decoder.AcceptedKeyboardReports>acceptedBefore && !decoder.FnDown && !failed && !cleaned && !ownership.LeaseEnded)
-                    { ResetRelayAfterNeutral(); neutralReady=true; }
+                    {
+                        if(outputMode!="events-only" || (eventPipe!=null && eventPipe.Connected))
+                        { ResetRelayAfterNeutral(); neutralReady=true; }
+                    }
                     RecordEdges(sourceEdges, delivered, false);
                     if (decoder.Bound) everTargetBound = true;
                     if(decoder.Bound && !keyboardAnnounced)
@@ -444,9 +466,11 @@ internal static class GlobeEtwFnProbe
                 string[] abi = ValidateAbi();
                 if (abi.Length != 0) throw new InvalidOperationException(string.Join("; ", abi));
                 DailyPaths.RequireInstalledCodePaths();
-                ownership=new BridgeOwnership(sessionName);
-                mouseOutput=OwnedMouseOutput.Start();
-                ResetRelayAfterNeutral();
+                DailyPaths.RequireConfiguredOutputMode(outputMode);
+                ownership=new BridgeOwnership(sessionName,outputMode);
+                if(outputMode=="events-only")eventPipe=new FnEventPipe(SessionGuid(sessionName).ToString("N"));
+                else mouseOutput=OwnedMouseOutput.Start();
+                if(outputMode!="events-only")ResetRelayAfterNeutral();
                 lock(gate) { continuity.Sample(); }
                 SystemEvents.PowerModeChanged+=OnPowerModeChanged; powerSubscribed=true;
                 int allocation = checked(120 + (sessionName.Length + 1) * 2);
@@ -572,6 +596,8 @@ internal static class GlobeEtwFnProbe
             { try { ownership.Dispose(); } catch(Exception error) { Fail("CloseOwnershipLease",0,error.Message); } }
             if(mouseOutput!=null)
             { try { mouseOutput.Dispose(); } catch(Exception error) { Fail("CloseOwnedMouseHook",0,error.Message); } }
+            if(eventPipe!=null)
+            { try { eventPipe.Dispose(); } catch(Exception error) { Fail("CloseFnEventPipe",0,error.Message); } }
             GC.KeepAlive(callback);
         }
 
@@ -590,6 +616,7 @@ internal static class GlobeEtwFnProbe
             {
                 StringBuilder json = new StringBuilder("{\"mode\":\"daily-globe-capture\",\"status\":");
                 json.Append(Json(failed ? "error" : (cancelled ? "cancelled" : "ok")));
+                json.Append(",\"outputMode\":").Append(Json(outputMode));
                 GlobeShortcutRelay.RelaySnapshot relayState=relay==null ? null : relay.Snapshot();
                 json.Append(",\"phase\":3,\"relayConfigured\":").Append(Bool(relay!=null));
                 json.Append(",\"transportReady\":").Append(Bool(consumerStarted));
@@ -848,7 +875,9 @@ internal static class GlobeEtwFnProbe
             if(!SourceEpochChanged(true,true,1,2) || !SourceEpochChanged(true,false,1,1) ||
                 !SourceEpochChanged(false,true,0,1) || SourceEpochChanged(true,true,2,2))
                 failures.Add("Every HID channel epoch change requires a new physical neutral report, including an empty-edge rebound.");
-            int latencyTests=0, relayTests=0, headerTests=0, consoleTests=0, outputTests=0, continuityTests=0, reconnectTests=0, linkTests=0;
+            int latencyTests=0, relayTests=0, headerTests=0, consoleTests=0, outputTests=0, continuityTests=0, reconnectTests=0, linkTests=0, eventPipeTests=0;
+            try { failures.AddRange(FnEventPipe.RunSelfTests(out eventPipeTests)); }
+            catch(Exception error) { failures.Add("Fixed Fn event pipe pure tests: "+error.Message); }
             try { failures.AddRange(ReconnectGuide.RunSelfTests(out reconnectTests)); failures.AddRange(KeyboardConnectionState.RunSelfTests(out linkTests)); }
             catch(Exception error) { failures.Add("Reconnect guide pure tests: "+error.Message); }
             try { failures.AddRange(CaptureContinuity.RunSelfTests(out continuityTests)); }
@@ -897,6 +926,7 @@ internal static class GlobeEtwFnProbe
             json.Append(",\"decoderTestCount\":").Append(GlobePacketDecoderTests.TestCount);
             json.Append(",\"headerTestCount\":").Append(headerTests).Append(",\"ownedOutputTestCount\":").Append(outputTests).Append(",\"consoleTestCount\":").Append(consoleTests);
             json.Append(",\"continuityTestCount\":").Append(continuityTests);
+            json.Append(",\"eventPipeTestCount\":").Append(eventPipeTests);
             json.Append(",\"reconnectGuideTestCount\":").Append(reconnectTests).Append(",\"linkStateTestCount\":").Append(linkTests);
             json.Append(",\"lowLatencyTestCount\":").Append(latencyTests).Append(",\"relayTestCount\":").Append(relayTests).Append(",\"nativeFlushCalls\":0,\"nativeInputCalls\":0");
             json.Append(",\"errors\":[");
@@ -904,26 +934,29 @@ internal static class GlobeEtwFnProbe
             Console.WriteLine(json.Append("]}").ToString());
             return failures.Count == 0 ? 0 : 1;
         }
-        if ((args.Length != 5) || args[0] != "--run-daily" || args[1] != "--keyboard-address" ||
-            (args.Length == 5 && args[3] != "--session-name"))
+        if ((args.Length != 5 && args.Length != 7) || args[0] != "--run-daily" || args[1] != "--keyboard-address" ||
+            args[3] != "--session-name" || (args.Length==7 && args[5]!="--output-mode"))
         {
             Console.WriteLine("{\"status\":\"not-started\",\"traceStarted\":false,\"injectionEnabled\":false,\"error\":\"Use --self-test. Live mode requires the installed daily supervisor and persistent-logging approval.\"}");
             return 64;
         }
         byte[] target;
         string requestedSessionName = null;
+        string requestedOutputMode="deskflow";
         try
         {
             DailyPaths.RequireConfiguredKeyboard(args[2]);
             target = ParseAddress(args[2]);
-            if (args.Length == 5) requestedSessionName = ParseSessionName(args[4]);
+            requestedSessionName = ParseSessionName(args[4]);
+            if(args.Length==7)requestedOutputMode=DailyPaths.NormalizeOutputMode(args[6]);
+            DailyPaths.RequireConfiguredOutputMode(requestedOutputMode);
         }
         catch (Exception error)
         {
             Console.WriteLine("{\"status\":\"not-started\",\"traceStarted\":false,\"injectionEnabled\":false,\"error\":" + Json(error.Message) + "}");
             return 64;
         }
-        using (Probe probe = new Probe(target, requestedSessionName))
+        using (Probe probe = new Probe(target, requestedSessionName,requestedOutputMode))
         {
             ConsoleCancelEventHandler cancel = delegate(object sender, ConsoleCancelEventArgs e) { e.Cancel = true; probe.Cancel(); };
             Console.CancelKeyPress += cancel;

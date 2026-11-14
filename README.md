@@ -20,6 +20,7 @@ The first device decoder handles a narrow Bluetooth Fn profile. The event model 
 | Hold, toggle and virtual dial consumers | Runnable synthetic examples; no real application or device control. |
 | JSON event stream | Runnable synthetic stdout example; no network service or capture. |
 | Windows capture + Deskflow output | Optional guarded integration with privileged logging requirements. |
+| Kanata companion | Experimental loopback virtual-key adapter and event-only capture path; independent/live validation pending. |
 | Other device profiles, KVMs or native output backends | Extension work; not implemented or claimed as supported. |
 
 **Source-only alpha.** The generalized Windows runtime's installation/live behavior remain unvalidated. There are no published binaries or claims of universal device support.
@@ -32,6 +33,12 @@ Requirements for the provided build: Windows x64, PowerShell 7 and the existing 
 ./Build.ps1
 ./artifacts/examples/InputLift.Examples.exe --demo all
 ```
+
+For the experimental Kanata companion, see the [integration guide](docs/integrations/kanata.md),
+[synthetic protocol evidence](evidence/kanata/README.md), and
+[independent tester checklist](docs/integrations/kanata-testing.md).
+`./Build.ps1 -IncludeKanataAdapter` builds its unprivileged code and runs pure
+checks; it does not start Kanata or keyboard processing.
 
 The default build creates `InputLift.Core.dll`, compiles the examples and runs pure tests. It requires no Deskflow installation or administrator privileges and does not capture hardware, inject input, configure logging or register startup tasks.
 
@@ -76,7 +83,12 @@ This also builds the Windows x64 capture/runtime package and runs its pure check
 
 The included live backend requires **administrator privileges, sensitive Windows Bluetooth logging and an unsupported private driver-refresh request**. Other local tracers could access keyboard reports and Bluetooth encryption keys. Clearing the driver's cached logging state requires a true Windows Restart.
 
-These requirements apply to the optional backend, not to the pure event model, decoder or examples. Read [SECURITY.md](SECURITY.md) and the [integration guide](docs/integrations/deskflow.md) before considering a live run. Other live integrations and a generic event-only capture service are not implemented.
+These requirements apply to the optional backend, not to the pure event model, decoder or examples. Read [SECURITY.md](SECURITY.md) and the [Deskflow integration guide](docs/integrations/deskflow.md) before considering a live run.
+An explicit experimental `events-only` installation mode emits fixed Fn state
+through a protected local pipe instead of native Mouse 5 input. The separate
+Kanata consumer runs without elevation. This is not a general scripting service;
+its installed/live behavior still needs validation. `-IncludeWindowsCapture`
+builds the same optional runtime without implying a Deskflow-only output mode.
 
 ## Extend InputLift
 

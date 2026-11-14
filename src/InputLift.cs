@@ -57,6 +57,7 @@ internal static class InputLift
     {
         public int Version;
         public string OwnerSid,InstanceId,TaskName,TaskMarker,TaskXmlSha256,AppDir,DataDir,KeyboardAddress;
+        public string OutputMode;
         public List<Payload> Files;
     }
     public sealed class ActiveRun
@@ -97,7 +98,8 @@ internal static class InputLift
             manifest.TaskMarker!="InputLift managed instance "+manifest.InstanceId+"; owner "+DailyPaths.OwnerSid ||
             !DailyPaths.PathEquals(manifest.AppDir,DailyPaths.CodeDirectory) || !DailyPaths.PathEquals(manifest.DataDir,DailyPaths.StateDirectory) ||
             manifest.TaskXmlSha256==null || !Regex.IsMatch(manifest.TaskXmlSha256,"^[0-9A-Fa-f]{64}$") ||
-            manifest.Files==null || manifest.Files.Count!=3) return false;
+            manifest.Files==null || manifest.Files.Count!=3 ||
+            (manifest.OutputMode!=null && manifest.OutputMode!="deskflow" && manifest.OutputMode!="events-only")) return false;
         HashSet<string> seen=new HashSet<string>(StringComparer.Ordinal);
         foreach(Payload file in manifest.Files)
         {
@@ -261,7 +263,9 @@ internal static class InputLift
             case "AwaitNeutral":return new ViewState("Release Globe","Release Globe and tap Shift once so the helper can confirm a clean starting state.",amber);
             case "Ready":return new ViewState("Fn is ready on the client","Fn presses and releases are forwarded as Mouse 5 while the pointer is on the remote client.",green);
             case "PausedOnHost":return new ViewState("Ready — pointer is on the host","Move the pointer onto the Deskflow client to forward Fn as Mouse 5. Fn is ignored on this Windows host.",blue);
-            case "Stopping":return new ViewState("Stopping","Releasing the mapped button and closing Bluetooth capture. Please wait for cleanup confirmation.",amber);
+            case "AwaitConsumer":return new ViewState("Waiting for the local event consumer","Start the reviewed event consumer. The producer sends only Fn state through a protected local pipe; it does not press keys.",amber);
+            case "EventsReady":return new ViewState("Fn events are ready","The local consumer receives Fn press, release and reset state. Its own status must confirm any mapped action.",green);
+            case "Stopping":return new ViewState("Stopping","Closing Bluetooth capture. Please wait for producer cleanup confirmation and check the consumer's mapped action separately.",amber);
             case "Stopped":return new ViewState("Stopped — restart required","Cleanup is verified. Use Windows Start → Power → Restart to fully clear Bluetooth logging.",amber);
             case "Idle":return new ViewState("Stopped","Click Start when you want Globe support. Closing this window leaves the tray controls available.",blue);
             case "Error":return new ViewState("Needs attention",string.IsNullOrEmpty(error)?"The helper could not continue. No automatic retry was attempted.":error,red);
@@ -275,13 +279,13 @@ internal static class InputLift
         private readonly Button startButton,stopButton,moreButton;
         private readonly bool previewMode;
         private Color stateColor;
-        internal StatusForm(Action start,Action stop,Action more,bool preview)
+        internal StatusForm(Action start,Action stop,Action more,bool preview,string outputMode="deskflow")
         {
             previewMode=preview;
             Text="InputLift";ClientSize=new Size(720,450);MinimumSize=Size;MaximumSize=Size;FormBorderStyle=FormBorderStyle.FixedSingle;
             MaximizeBox=false;StartPosition=FormStartPosition.CenterScreen;BackColor=Color.FromArgb(244,246,250);Font=new Font("Segoe UI",10);
             Label title=new Label { Text="InputLift",Font=new Font("Segoe UI",21,FontStyle.Bold),Location=new Point(24,18),Size=new Size(650,38) };
-            Label sub=new Label { Text="Bluetooth Fn → Mouse 5 → Deskflow",ForeColor=Color.FromArgb(85,96,114),Location=new Point(26,60),Size=new Size(650,24) };
+            Label sub=new Label { Text=outputMode=="events-only"?"Bluetooth Fn → protected local event pipe":"Bluetooth Fn → Mouse 5 → Deskflow",ForeColor=Color.FromArgb(85,96,114),Location=new Point(26,60),Size=new Size(650,24) };
             previewLabel=new Label { Text=preview?"Preview — capture off":"Runs in the Windows notification area",ForeColor=Color.FromArgb(85,96,114),Location=new Point(26,88),Size=new Size(650,23) };
             statusCard=new Panel { BackColor=Color.White,Location=new Point(24,121),Size=new Size(672,121) };
             statusCard.Paint+=delegate(object sender,PaintEventArgs e) { using(SolidBrush brush=new SolidBrush(stateColor)) e.Graphics.FillEllipse(brush,17,20,12,12); };
@@ -292,7 +296,7 @@ internal static class InputLift
             stopButton=new Button { Text="Stop",Location=new Point(152,281),Size=new Size(116,36),FlatStyle=FlatStyle.System };
             moreButton=new Button { Text="More…",Location=new Point(280,281),Size=new Size(116,36),FlatStyle=FlatStyle.System };
             startButton.Click+=delegate{if(start!=null) start();};stopButton.Click+=delegate{if(stop!=null) stop();};moreButton.Click+=delegate{if(more!=null) more();};
-            Label help=new Label { Text="Configure Mouse 5 in your remote application. Release Fn and finish any active\r\naction before returning the pointer to the Windows host.",Location=new Point(26,334),Size=new Size(665,47),ForeColor=Color.FromArgb(65,76,94),Font=new Font("Segoe UI",9) };
+            Label help=new Label { Text=outputMode=="events-only"?"Event-only producer: no native input is sent here. Stop the local consumer\r\nand confirm its mapped action is released before closing it.":"Configure Mouse 5 in your remote application. Release Fn and finish any active\r\naction before returning the pointer to the Windows host.",Location=new Point(26,334),Size=new Size(665,47),ForeColor=Color.FromArgb(65,76,94),Font=new Font("Segoe UI",9) };
             Label privacy=new Label { Text="Bluetooth sensitive logging is enabled while this helper runs. After stopping,\r\nrestart Windows to fully clear the driver's logging state.",Location=new Point(26,389),Size=new Size(665,43),ForeColor=Color.FromArgb(105,87,55),Font=new Font("Segoe UI",9) };
             statusCard.Controls.AddRange(new Control[]{statusTitle,statusDetail});Controls.AddRange(new Control[]{title,sub,previewLabel,statusCard,counters,startButton,stopButton,moreButton,help,privacy});
             SetState(MapState("Starting",null),0,0,false,false);
@@ -346,7 +350,7 @@ internal static class InputLift
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Stop and disable automatic startup",null,delegate{RequestStop(false,true);});
             menu.Items.Add("Stop and exit",null,delegate{RequestStop(true,false);});
-            form=new StatusForm(StartCapture,delegate{RequestStop(false,false);},delegate{menu.Show(form,new Point(280,318));},false);
+            form=new StatusForm(StartCapture,delegate{RequestStop(false,false);},delegate{menu.Show(form,new Point(280,318));},false,DailyPaths.ReadConfiguredOutputMode());
             icon=new NotifyIcon { Icon=SystemIcons.Application,Text="InputLift — starting",Visible=true,ContextMenuStrip=menu };
             icon.DoubleClick+=delegate{form.Present();};
             timer=new System.Windows.Forms.Timer { Interval=500 };timer.Tick+=Tick;timer.Start();
@@ -382,7 +386,8 @@ internal static class InputLift
                 lock(outputGate) guardErrors.Clear();
                 if(guard!=null) { guard.Dispose();guard=null; }
                 string arguments="--run-daily --keyboard-address "+manifest.KeyboardAddress.ToUpperInvariant()+" --expected-probe-sha256 "+CaptureHash(manifest)+
-                    " --tray-pid "+trayPid.ToString(CultureInfo.InvariantCulture)+" --tray-start "+trayTicks.ToString(CultureInfo.InvariantCulture);
+                    " --tray-pid "+trayPid.ToString(CultureInfo.InvariantCulture)+" --tray-start "+trayTicks.ToString(CultureInfo.InvariantCulture)+
+                    " --output-mode "+DailyPaths.NormalizeOutputMode(manifest.OutputMode);
                 Process launched=new Process { StartInfo=new ProcessStartInfo(DailyPaths.CodeFile("InputLiftGuard.exe"),arguments) {
                     WorkingDirectory=DailyPaths.CodeDirectory,UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true } };
                 launched.OutputDataReceived+=delegate(object sender,DataReceivedEventArgs e) {
@@ -549,7 +554,7 @@ internal static class InputLift
         foreach(string[] bad in new[]{new string[0],new[]{"--tray","extra"},new[]{"--start","cmd"},new[]{"--render-preview","relative.png"},new[]{"--render-preview",@"C:\preview.exe"}})
             check(Parse(bad)==Mode.Invalid,"Unknown or arbitrary live invocation refused");
         check(Parse(new[]{"--render-preview",@"C:\preview.png"})==Mode.Preview,"Absolute PNG-only preview accepted");
-        foreach(string state in new[]{"Starting","WaitingForKeyboard","WaitingForDisconnect","TurnKeyboardOn","WaitingForIdentification","AwaitNeutral","Ready","PausedOnHost","Stopping","Stopped","Idle","Error"})
+        foreach(string state in new[]{"Starting","WaitingForKeyboard","WaitingForDisconnect","TurnKeyboardOn","WaitingForIdentification","AwaitNeutral","Ready","PausedOnHost","AwaitConsumer","EventsReady","Stopping","Stopped","Idle","Error"})
         { ViewState view=MapState(state,null);check(!string.IsNullOrEmpty(view.Title)&&!string.IsNullOrEmpty(view.Detail),"Known state has plain user-facing status"); }
         check(MapState("Error","Exact failure").Detail=="Exact failure","Exact errors are retained");
         check(MapState("WaitingForKeyboard",null).Detail.Contains("OFF") && MapState("WaitingForDisconnect",null).Detail.Contains("OFF"),"Initial reconnect states keep physical power OFF");

@@ -4,7 +4,8 @@ InputLift separates a common event model and device decoders from consumers, a p
 
 ```text
 Acquisition backend → independent Fn decoder → transition consumer / output adapter
-                                               └─ included Deskflow integration
+                                               ├─ included Deskflow integration
+                                               └─ experimental local Kanata companion
 ```
 
 ## Independent core
@@ -25,9 +26,26 @@ This backend retains the sensitive-logging/private-refresh tradeoffs described i
 
 `DeskflowRouteGate.cs` contains the fixed Deskflow executable/window checks. `OwnedMouseOutput.cs` retains the native marked Mouse 5 output, hook acknowledgement and local suppression. Its new-press permission combines hook health with the Deskflow gate; releases remain possible for cleanup.
 
-The adapter lets Deskflow observe marked events before suppressing local window delivery. Its route check is a compatibility heuristic, not authenticated focus. It remains the only live output integration. Removing its gate is not a supported way to create a generic local injector.
+The adapter lets Deskflow observe marked events before suppressing local window delivery. Its route check is a compatibility heuristic, not authenticated focus. Removing its gate is not a supported way to create a generic local injector.
 
-An additional consumer can use the independent decoder API, but live acquisition, activation policy and output safety must be implemented and reviewed separately. There is no arbitrary elevated plugin/command mechanism, general event-only live mode or other supported KVM adapter.
+## Experimental event-only source and Kanata consumer
+
+An explicit protected installation mode replaces Mouse 5 output with a fixed,
+outbound local Fn-state pipe. It has a selected-owner read ACL, rejects remote
+clients, requires a first pipe instance, bounds queued edges/write times, starts
+with reset, and requires fresh neutral input. Only reset/down/up/heartbeat frames
+are emitted. No consumer-supplied action or plugin runs inside elevated capture.
+
+The unprivileged Kanata companion authenticates the selected capture process,
+accepts the ordered stream, and maps one recovered control to a dedicated virtual
+key on Kanata's loopback TCP interface. Output has separate supervision and
+release handling. The acquisition guardian proves source cleanup, not remote
+application state. Kanata provides no successful-action acknowledgement and does
+not release virtual keys on client disconnect. See the
+[integration and validation stages](integrations/kanata.md).
+
+This implementation is experimental. A generic event bus, arbitrary elevated
+commands, and other KVM adapters are not provided.
 
 ## Deployment and validation boundary
 

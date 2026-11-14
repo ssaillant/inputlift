@@ -159,6 +159,28 @@ internal static class DailyPaths
         if(!ValidKeyboardAddress(address) || !string.Equals(address,ReadConfiguredKeyboardAddress(),StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The launch keyboard address differs from the protected installation configuration.");
     }
+    internal static string NormalizeOutputMode(string value)
+    {
+        if(value==null)return "deskflow"; // Existing protected installations predate output selection.
+        if(value!="deskflow" && value!="events-only")throw new ArgumentException("Only deskflow or events-only output is supported.");
+        return value;
+    }
+    internal static string ReadConfiguredOutputMode()
+    {
+        string path=Path.Combine(StateDirectory,"install-manifest.json");
+        RequireProtectedMetadataFile(path);
+        var manifest=new JavaScriptSerializer().Deserialize<System.Collections.Generic.Dictionary<string,object>>(ReadTextShared(path,65536));
+        if(!ConfigurationValid(manifest,OwnerSid))throw new InvalidOperationException("Installed output configuration identity is invalid.");
+        object mode;
+        if(!manifest.TryGetValue("OutputMode",out mode))return "deskflow";
+        if(!(mode is string))throw new InvalidOperationException("Installed output mode must be an explicit string.");
+        return NormalizeOutputMode((string)mode);
+    }
+    internal static void RequireConfiguredOutputMode(string mode)
+    {
+        if(NormalizeOutputMode(mode)!=ReadConfiguredOutputMode())
+            throw new InvalidOperationException("The launch output mode differs from the protected installation configuration.");
+    }
     internal static string ReadTextShared(string path,int maximumBytes)
     {
         // ReplaceFile briefly holds an incompatible handle even though readers
@@ -277,6 +299,10 @@ internal static class DailyPaths
         config["TaskName"]="InputLift-other";check(!ConfigurationValid(config,OwnerSid),"Task identity must match installation owner");config["TaskName"]=TaskName;
         config["KeyboardAddress"]="000000000000";check(!ConfigurationValid(config,OwnerSid),"Invalid keyboard cannot enter protected configuration");
         config.Remove("KeyboardAddress");check(!ConfigurationValid(config,OwnerSid),"Missing keyboard configuration fails closed");
+        check(NormalizeOutputMode(null)=="deskflow" && NormalizeOutputMode("deskflow")=="deskflow","Legacy output defaults only to existing Deskflow behavior.");
+        check(NormalizeOutputMode("events-only")=="events-only","Event-only mode is explicit.");
+        foreach(string invalid in new[]{"","Events-Only","mouse5","kanata","events-only --command x","deskflow\n"})
+        { bool refused=false;try{NormalizeOutputMode(invalid);}catch(ArgumentException){refused=true;}check(refused,"No arbitrary elevated output mode."); }
         count=cases;return errors.ToArray();
     }
 }

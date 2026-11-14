@@ -16,6 +16,7 @@ internal sealed class BridgeOwnership : IDisposable
         public string SessionName;
         public int ChildPid;
         public long ChildStartUtcTicks;
+        public string OutputMode;
     }
     public sealed class GuardPhase
     {
@@ -29,7 +30,7 @@ internal sealed class BridgeOwnership : IDisposable
     private readonly EventWaitHandle done;
     private static JavaScriptSerializer Serializer() { return new JavaScriptSerializer { MaxJsonLength=65536 }; }
 
-    internal BridgeOwnership(string expectedSessionName)
+        internal BridgeOwnership(string expectedSessionName,string outputMode)
     {
         const string prefix="InputLift.Daily.";
         Guid parsed;
@@ -49,7 +50,8 @@ internal sealed class BridgeOwnership : IDisposable
             {
                 CheckLeasePhase();
                 GuardRegistration state=Read<GuardRegistration>(".state.json");
-                if(state==null || state.Nonce!=nonce || state.SessionName!=sessionName)
+                if(state==null || state.Nonce!=nonce || state.SessionName!=sessionName ||
+                    DailyPaths.NormalizeOutputMode(state.OutputMode)!=DailyPaths.NormalizeOutputMode(outputMode))
                     throw new InvalidOperationException("Guard registration nonce/session mismatch; no shortcut output allowed.");
                 if(state.ChildPid==childPid && state.ChildStartUtcTicks==childStart) break;
                 if(state.ChildPid!=0 || state.ChildStartUtcTicks!=0 || wait.ElapsedMilliseconds>=5000)
@@ -76,6 +78,7 @@ internal sealed class BridgeOwnership : IDisposable
             throw new InvalidOperationException("Guardian is not in the enabled phase; no new shortcut press allowed.");
     }
     internal bool LeaseEnded { get { return done.WaitOne(0); } }
+    internal void RequireActiveLease() { CheckLeasePhase(); }
 
     internal void Persist(bool armed, int mouseButton)
     {

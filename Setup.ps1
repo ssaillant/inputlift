@@ -6,6 +6,7 @@ param(
     [ValidateSet('Inspect','Install','Uninstall')][string]$Mode='Inspect',
     [string]$PackageFolder=(Join-Path $PSScriptRoot 'artifacts\package'),
     [string]$KeyboardAddress,
+    [ValidateSet('deskflow','events-only')][string]$OutputMode='deskflow',
     [string]$ExpectedManifestSha256,
     [switch]$EnablePersistentLogging,
     [switch]$CreateStartMenuShortcut,
@@ -34,6 +35,15 @@ function Get-NormalizedKeyboardAddress([string]$Address) {
         throw 'KeyboardAddress must be exactly 12 hexadecimal digits without separators, excluding zero and broadcast addresses.'
     }
     return $Address.ToUpperInvariant()
+}
+function Get-InstalledOutputMode([object]$Manifest) {
+    # Existing version-1 installations predate explicit output selection.
+    $property=$Manifest.PSObject.Properties['OutputMode']
+    if($null -eq $property) { return 'deskflow' }
+    if($property.Value -isnot [string] -or $property.Value -cnotin @('deskflow','events-only')) {
+        throw 'Installed output mode is invalid.'
+    }
+    return [string]$property.Value
 }
 function Assert-Identity {
     if([IntPtr]::Size -ne 8) { throw 'Use 64-bit PowerShell.' }
@@ -284,6 +294,7 @@ function Read-InstalledManifest {
     $manifest=Get-Content -LiteralPath $installManifest -Raw | ConvertFrom-Json
     $parsed=[guid]::Empty
     if($manifest.Version -ne 1 -or $manifest.OwnerSid -ne $fixedOwnerSid -or -not [guid]::TryParseExact([string]$manifest.InstanceId,'N',[ref]$parsed) -or $manifest.TaskName -cne $taskName) { throw 'Installed manifest identity differs.' }
+    $null=Get-InstalledOutputMode $manifest
     if((Get-NormalizedKeyboardAddress ([string]$manifest.KeyboardAddress)) -cne [string]$manifest.KeyboardAddress) { throw 'Installed keyboard address is not canonical uppercase hexadecimal.' }
     if(-not ([string]$manifest.AppDir).Equals($appDir,[StringComparison]::OrdinalIgnoreCase) -or -not ([string]$manifest.DataDir).Equals($dataDir,[StringComparison]::OrdinalIgnoreCase)) { throw 'Installed manifest paths differ.' }
     if($manifest.TaskMarker -cne ('InputLift managed instance '+$manifest.InstanceId+'; owner '+$fixedOwnerSid)) { throw 'Installed task marker differs.' }
@@ -348,6 +359,7 @@ function Read-RecoveryWindow {
 try {
     if($Mode -eq 'Install') { $KeyboardAddress=Get-NormalizedKeyboardAddress $KeyboardAddress }
     elseif($PSBoundParameters.ContainsKey('KeyboardAddress')) { throw '-KeyboardAddress is allowed only with Install.' }
+    if($PSBoundParameters.ContainsKey('OutputMode') -and $Mode -ne 'Install') { throw '-OutputMode is allowed only with Install.' }
     if($Start -and $Mode -ne 'Install') { throw '-Start is allowed only with Install.' }
     if($CreateStartMenuShortcut -and $Mode -ne 'Install') { throw '-CreateStartMenuShortcut is allowed only with Install.' }
     if($Mode -eq 'Install' -and -not $EnablePersistentLogging) { throw 'Install requires -EnablePersistentLogging after explicit approval of ongoing Bluetooth logging and automatic startup.' }
@@ -371,7 +383,7 @@ try {
         if(Test-SensitiveFlag) { throw 'EtwLogSensitiveData already exists; stop and verify the prior capture before installing.' }
         $createdApp=$false; $createdData=$false; $createdShortcut=$false; $committed=$false; $registered=$null
         $instance=[guid]::NewGuid().ToString('N')
-        $manifest=[ordered]@{Version=1;InstanceId=$instance;OwnerSid=$fixedOwnerSid;KeyboardAddress=$KeyboardAddress;AppDir=$appDir;DataDir=$dataDir;TaskName=$taskName;TaskMarker=('InputLift managed instance '+$instance+'; owner '+$fixedOwnerSid);PackageManifestSha256=$package.Hash;TaskXmlSha256=$null;Files=@($package.Manifest.Files);ShortcutPath=$null;ShortcutSha256=$null;InstalledUtc=[DateTime]::UtcNow.ToString('o')}
+        $manifest=[ordered]@{Version=1;InstanceId=$instance;OwnerSid=$fixedOwnerSid;KeyboardAddress=$KeyboardAddress;OutputMode=$OutputMode;AppDir=$appDir;DataDir=$dataDir;TaskName=$taskName;TaskMarker=('InputLift managed instance '+$instance+'; owner '+$fixedOwnerSid);PackageManifestSha256=$package.Hash;TaskXmlSha256=$null;Files=@($package.Manifest.Files);ShortcutPath=$null;ShortcutSha256=$null;InstalledUtc=[DateTime]::UtcNow.ToString('o')}
         try {
             New-ProtectedDirectory $appDir ([ref]$createdApp)
             New-ProtectedDirectory $dataDir ([ref]$createdData)

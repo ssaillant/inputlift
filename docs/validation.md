@@ -16,14 +16,33 @@ Run from a clean source checkout or an archive created from Git:
 ./Build.ps1
 ./artifacts/examples/InputLift.Examples.exe --demo all
 ./Build.ps1 -IncludeDeskflowAdapter
+./Build.ps1 -IncludeKanataAdapter
+./evidence/kanata/Verify-Fixture.ps1
+./artifacts/kanata/InputLift.Kanata.exe --test-transport
 ./tests/Test-BuildFailure.ps1
 ```
 
-The first build exercises 72 core checks and 22 synthetic-example checks. The optional build also exercises 394 runtime checks and 21 setup-validation checks. Some decoder checks run in both assemblies; these counts must not be described as distinct hardware tests.
+The default build exercises 72 core checks and 22 synthetic-example checks. The
+optional runtime also runs capture, guard, tray and 30 setup-boundary checks;
+their generated reports give per-component counts. Some decoder checks run in
+both assemblies; these counts must not be described as distinct hardware tests.
+The Kanata build runs 28 pure checks. Its explicit transport mode additionally
+runs seven checks against an owned loopback stub, including supervised failure
+paths. That mode opens local sockets but does not connect to a real application
+or send native input. The synthetic packet verifier checks 28 steps across three
+scenarios through the public decoder and event adapter.
 
-The failure regression intentionally runs source-incomplete fixtures and verifies 24 conditions: generated success reports are invalidated, an optional rebuild cannot leave an old installable manifest after failing early, a default build preserves an unrelated optional package, and payload/unrelated sentinels remain unchanged. Its small diagnostic fixtures are retained under ignored `artifacts/readiness/` paths.
+The failure regression intentionally runs source-incomplete fixtures and verifies
+45 conditions: generated success reports are invalidated, an optional rebuild
+cannot leave an old installable manifest after failing early, unrelated optional
+outputs are preserved, and payload/unrelated sentinels remain unchanged. Its
+small diagnostic fixtures are retained under ignored `artifacts/readiness/` paths.
 
-All of these checks are inert with respect to hardware: no live tracing, input injection, setup entry point, logging setting or startup task is activated. The demos only print synthetic events or update virtual state.
+These checks do not start live tracing, inject input, invoke setup or alter
+logging/startup. The default examples only print synthetic events or update
+virtual state. The separately approved real Kanata demo is interactive and is
+never a default build/CI step. Its [recorded result](integrations/kanata-status.md)
+proves a synthetic layer lifecycle, not physical Bluetooth compatibility.
 
 Compiler CS0649 warnings in JSON-deserialized runtime state classes are expected with the existing compiler. They are not suppressed globally. Builds are not asserted to be bit-for-bit reproducible: executable identities/hashes can change between builds, and the installer verifies the manifest from the same local build.
 
@@ -31,6 +50,7 @@ Compiler CS0649 warnings in JSON-deserialized runtime state classes are expected
 
 The GitHub workflow targets the Windows Server 2025 runner generation, uses a verified full checkout commit SHA, a read-only token and no persisted checkout credentials. It runs the same pure build/test modes and the failed-build regression. Runner-image updates still occur within that generation. Dependabot is configured to propose monthly action updates; updates are not automatically merged.
 
-The workflow can only be verified on GitHub after publication. Until then, a local clean-archive run is evidence of source completeness, not proof of hosted CI success.
+The original public source commit passed its hosted workflow. Changes must have
+their own hosted run; local success does not establish a candidate's CI result.
 
 The renamed/generalized live capture package, a fresh privileged installation, reconnect behavior and additional device profiles remain unvalidated in this public version. Keep these limits in compatibility and release notes; do not publish stable end-user binaries on the strength of pure checks alone.

@@ -45,11 +45,12 @@ function Write-NewFixtureFile([string]$Path,[string]$Text) {
     try { $bytes=$encoding.GetBytes($Text);$stream.Write($bytes,0,$bytes.Length) }
     finally { $stream.Dispose() }
 }
-function Invoke-FailingBuild([string]$Fixture,[bool]$Adapter) {
+function Invoke-FailingBuild([string]$Fixture,[string]$BuildMode) {
     $build=Join-Path $Fixture 'Build.ps1'
     if($build.Contains('"')) { throw 'Unexpected quote in fixed fixture path.' }
     $arguments='-NoProfile -File "'+$build+'"'
-    if($Adapter) { $arguments+=' -IncludeDeskflowAdapter' }
+    if($BuildMode -eq 'adapter') { $arguments+=' -IncludeDeskflowAdapter' }
+    if($BuildMode -eq 'kanata') { $arguments+=' -IncludeKanataAdapter' }
     $engine=[Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
     $start=[Diagnostics.ProcessStartInfo]::new($engine,$arguments)
     $start.UseShellExecute=$false;$start.CreateNoWindow=$true
@@ -75,11 +76,11 @@ New-FixtureDirectory $fixtureRoot
 $successMarker='{"status":"ok","fixture":"previous-success"}'
 $unrelatedMarker='unrelated fixture file; preserve exactly'
 $payloadMarker='non-executable payload sentinel; preserve exactly'
-foreach($mode in @('default','adapter')) {
+foreach($mode in @('default','adapter','kanata')) {
     $fixture=Join-Path $fixtureRoot $mode
     New-FixtureDirectory $fixture
     Copy-Item -LiteralPath (Join-Path $repoRoot 'Build.ps1') -Destination (Join-Path $fixture 'Build.ps1')
-    foreach($directory in @('core','examples','package')) {
+    foreach($directory in @('core','examples','package','kanata')) {
         New-FixtureDirectory (Join-Path $fixture ('artifacts\'+$directory))
         $folder=Join-Path $fixture ('artifacts\'+$directory)
         Write-NewFixtureFile (Join-Path $folder 'self-test-results.json') $successMarker
@@ -88,12 +89,14 @@ foreach($mode in @('default','adapter')) {
     $core=Join-Path $fixture 'artifacts\core'
     $examples=Join-Path $fixture 'artifacts\examples'
     $package=Join-Path $fixture 'artifacts\package'
+    $kanata=Join-Path $fixture 'artifacts\kanata'
     Write-NewFixtureFile (Join-Path $core 'InputLift.Core.dll') $payloadMarker
     Write-NewFixtureFile (Join-Path $examples 'InputLift.Examples.exe') $payloadMarker
     Write-NewFixtureFile (Join-Path $package 'InputLift.exe') $payloadMarker
+    Write-NewFixtureFile (Join-Path $kanata 'InputLift.Kanata.exe') $payloadMarker
     Write-NewFixtureFile (Join-Path $package 'package.json') $successMarker
     $adapter=$mode -eq 'adapter'
-    Invoke-FailingBuild $fixture $adapter
+    Invoke-FailingBuild $fixture $mode
     Assert-Check (-not(Test-Path -LiteralPath (Join-Path $core 'self-test-results.json'))) "$mode core success report was invalidated."
     Assert-Check (-not(Test-Path -LiteralPath (Join-Path $examples 'self-test-results.json'))) "$mode examples success report was invalidated."
     foreach($name in @('package.json','self-test-results.json')) {
@@ -101,10 +104,13 @@ foreach($mode in @('default','adapter')) {
         if($adapter) { Assert-Check (-not(Test-Path -LiteralPath $path)) "Adapter failure invalidated $name before core compilation." }
         else { Assert-Check ([IO.File]::ReadAllText($path) -ceq $successMarker) "Default failure left optional $name unchanged." }
     }
-    foreach($folder in @($core,$examples,$package)) {
+    $kanataSuccess=Join-Path $kanata 'self-test-results.json'
+    if($mode -eq 'kanata') { Assert-Check (-not(Test-Path -LiteralPath $kanataSuccess)) 'Kanata failure invalidated its success report before core compilation.' }
+    else { Assert-Check ([IO.File]::ReadAllText($kanataSuccess) -ceq $successMarker) "$mode failure left optional Kanata report unchanged." }
+    foreach($folder in @($core,$examples,$package,$kanata)) {
         Assert-Check ([IO.File]::ReadAllText((Join-Path $folder 'unrelated.txt')) -ceq $unrelatedMarker) "$mode preserved an unrelated file."
     }
-    foreach($path in @((Join-Path $core 'InputLift.Core.dll'),(Join-Path $examples 'InputLift.Examples.exe'),(Join-Path $package 'InputLift.exe'))) {
+    foreach($path in @((Join-Path $core 'InputLift.Core.dll'),(Join-Path $examples 'InputLift.Examples.exe'),(Join-Path $package 'InputLift.exe'),(Join-Path $kanata 'InputLift.Kanata.exe'))) {
         Assert-Check ([IO.File]::ReadAllText($path) -ceq $payloadMarker) "$mode preserved a payload sentinel."
     }
 }
