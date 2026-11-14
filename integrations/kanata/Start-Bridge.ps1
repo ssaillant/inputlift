@@ -113,8 +113,18 @@ function Assert-BridgeSnapshot([object]$Manifest,[object]$Active,[object]$Status
     }
     $updated=Get-BridgeField $Status 'UpdatedUtc'
     $parsed=[DateTimeOffset]::MinValue
-    if($updated -isnot [string] -or -not [DateTimeOffset]::TryParseExact($updated,'o',[Globalization.CultureInfo]::InvariantCulture,
-        [Globalization.DateTimeStyles]::None,[ref]$parsed) -or $parsed.Offset -ne [TimeSpan]::Zero) {
+    # ConvertFrom-Json may deserialize an ISO-Z value as DateTime. Accept only
+    # its explicit UTC kind; never reinterpret Local/Unspecified as UTC. Other
+    # PowerShell 7 representations retain the strict zero-offset string path.
+    if($updated -is [DateTime]) {
+        if($updated.Kind -ne [DateTimeKind]::Utc) { throw 'BridgeStatusTime: expected a UTC round-trip timestamp.' }
+        $parsed=[DateTimeOffset]::new($updated)
+    } elseif($updated -is [string]) {
+        if(-not [DateTimeOffset]::TryParseExact($updated,'o',[Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::None,[ref]$parsed) -or $parsed.Offset -ne [TimeSpan]::Zero) {
+            throw 'BridgeStatusTime: expected a UTC round-trip timestamp.'
+        }
+    } else {
         throw 'BridgeStatusTime: expected a UTC round-trip timestamp.'
     }
     $age=($NowUtc.ToUniversalTime()-$parsed).TotalMilliseconds

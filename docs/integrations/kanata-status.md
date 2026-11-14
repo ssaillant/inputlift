@@ -13,7 +13,7 @@ deployment and physical-source testing.
 
 | Stage | Result and scope |
 |---|---|
-| Launcher | 98 pure metadata/policy checks pass; no entrypoint or protected-state read. |
+| Launcher | 111 pure metadata/policy checks pass locally, including the JSON timestamp boundary; no entrypoint or protected-state read. A fresh hosted run is required. |
 | Consumer lifecycle | 28 pure checks and eight owned-stub/process checks pass, including intentional stop while held and release through the worker's existing connection. |
 | Native pipe | Five cases passed in [hosted run 43625183677](https://github.com/ssaillant/inputlift/actions/runs/43625183677) at [`02543d4`](https://github.com/ssaillant/inputlift/commit/02543d493fff80cf21e5f42d45c35f83a7e87a4e): selected-user read, denied write, ordered frames/reset, disconnect/slow-reader handling, and bounded disposal. |
 | Native fixture boundary | Exact production pipe source with a test-only reader-identity shim; two CI accounts. It does not prove production's same-account elevation, installed image/metadata or remote SMB behavior. |
@@ -22,7 +22,9 @@ deployment and physical-source testing.
 | Independent tester/maintainer feedback | Recruitment/proposal remain open; no external validation or acceptance claimed. |
 
 The successful hosted result covers the strict coordinator assertions in that
-revision. The fixture deliberately separates duplicate-instance rejection from
+revision, before the UTC timestamp fix. The updated 111-check launcher suite has
+local validation only; the current candidate needs a fresh hosted run.
+The fixture deliberately separates duplicate-instance rejection from
 isolated first-instance-flag behavior: Windows returned `ERROR_PIPE_BUSY` (231)
 under the production one-instance limit, with the original producer healthy.
 The flag policy is source-checked; its isolated kernel cause is not claimed.

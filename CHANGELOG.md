@@ -4,8 +4,10 @@
 
 - Add default read-only protected-state inspection and an explicit `-Connect`
   bridge launcher; session identifiers no longer need to be copied manually.
-- Add 98 pure launcher checks and an explicit event-only installation/recovery
+- Add 111 pure launcher checks and an explicit event-only installation/recovery
   recipe for opt-in developer testing.
+- Accept UTC `DateTime` values produced by PowerShell JSON parsing while
+  retaining strict UTC-kind and freshness checks.
 - Treat an intentional Ctrl+C as graceful cancellation, with release through the
   worker's existing connection; unexpected EOF/heartbeat loss remains an error.
 - Correct the event-only pipe's native direction from inbound to outbound. The
@@ -15,6 +17,10 @@
   pipe fixtures. All five native scenarios passed in
   [hosted CI](https://github.com/ssaillant/inputlift/actions/runs/43625183677).
   These use a test-only reader-identity shim, not a production installation.
+
+The hosted result at `02543d4` predates the UTC timestamp fix. The updated
+111-check launcher suite passes locally; the current candidate needs a fresh
+hosted run.
 
 The installed event-only and physical Bluetooth path still needs validation.
 There is no independent tester or upstream acceptance claim.

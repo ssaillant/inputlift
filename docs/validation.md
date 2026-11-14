@@ -32,9 +32,11 @@ paths. That mode opens local sockets but does not connect to a real application
 or send native input. The synthetic packet verifier checks 28 steps across three
 scenarios through the public decoder and event adapter.
 
-The normal-user bridge launcher's 98 pure metadata/policy checks are also part
+The normal-user bridge launcher's 111 pure metadata/policy checks are also part
 of the optional build. They extract validation functions without invoking the
 entrypoint, reading protected state, connecting to a source, or starting a process.
+The expanded suite passes locally and covers the actual JSON timestamp boundary,
+including UTC `DateTime` values, strict UTC-kind checks and freshness limits.
 Actual installed metadata/native authentication still needs deployment testing.
 
 The failure regression intentionally runs source-incomplete fixtures and verifies
@@ -70,7 +72,10 @@ but differs from production's same-account elevation and fixed installed image.
 Treat the per-case observed result as evidence; compiling the fixture is not a
 native test pass. Remote SMB rejection and physical hardware are not exercised.
 
-The original public source commit passed its hosted workflow. Changes must have
-their own hosted run; local success does not establish a candidate's CI result.
+[Hosted run 43625183677](https://github.com/ssaillant/inputlift/actions/runs/43625183677)
+passed at [`02543d4`](https://github.com/ssaillant/inputlift/commit/02543d493fff80cf21e5f42d45c35f83a7e87a4e),
+before the UTC timestamp fix and expanded 111-check launcher suite. Those changes
+have local validation only and need a fresh hosted run; local success does not
+establish the updated candidate's CI result.
 
 The renamed/generalized live capture package, a fresh privileged installation, reconnect behavior and additional device profiles remain unvalidated in this public version. Keep these limits in compatibility and release notes; do not publish stable end-user binaries on the strength of pure checks alone.

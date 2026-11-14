@@ -58,6 +58,38 @@ foreach($field in @('KeyboardBound','NeutralConfirmed')) { $fixture=Fixture;$fix
 foreach($time in @($null,0,'not-a-time',$now.AddSeconds(-6).UtcDateTime.ToString('o'),$now.AddSeconds(2).UtcDateTime.ToString('o'),$now.ToOffset([TimeSpan]::FromHours(2)).ToString('o'))) {
     $fixture=Fixture;$fixture.Status.UpdatedUtc=$time;Refused { Validate $fixture } 'Timestamp must be current UTC'
 }
+$fixture=Fixture;$fixture.Status.UpdatedUtc=$now.UtcDateTime;Validate $fixture;Check $true 'Native UTC DateTime is accepted after JSON deserialization'
+$fixture=Fixture;$fixture.Status.UpdatedUtc=$now.ToString('o');Validate $fixture;Check $true 'Strict zero-offset round-trip string remains accepted'
+foreach($kind in @([DateTimeKind]::Local,[DateTimeKind]::Unspecified)) {
+    $fixture=Fixture;$fixture.Status.UpdatedUtc=[DateTime]::SpecifyKind($now.UtcDateTime,$kind)
+    Refused { Validate $fixture } 'Local or unspecified DateTime is never relabeled UTC'
+}
+foreach($time in @($now.AddSeconds(-6).UtcDateTime,$now.AddSeconds(2).UtcDateTime)) {
+    $fixture=Fixture;$fixture.Status.UpdatedUtc=$time;Refused { Validate $fixture } 'Native UTC DateTime still obeys freshness bounds'
+}
+$fixture=Fixture;$fixture.Status.UpdatedUtc=$now;Refused { Validate $fixture } 'Other timestamp objects do not silently widen the accepted schema'
+
+# Exercise the actual JSON parser boundary with a complete synthetic source
+# snapshot. Constructed string properties alone miss automatic date conversion.
+$rawSnapshot=@'
+{
+  "Manifest":{"Version":1,"OwnerSid":"S-1-5-21-1-2-3-1001","TaskName":"InputLift-S-1-5-21-1-2-3-1001","OutputMode":"events-only"},
+  "Active":{"Version":1,"RunNonce":"0123456789abcdef0123456789abcdef","TrayPid":11,"TrayStartUtcTicks":100,"GuardPid":12,"GuardStartUtcTicks":101,"WorkerPid":13,"WorkerStartUtcTicks":102,"GuardianPid":14,"GuardianStartUtcTicks":103,"BootUtcTicks":50},
+  "Status":{"Nonce":"0123456789abcdef0123456789abcdef","WorkerPid":13,"WorkerStartUtcTicks":102,"OutputMode":"events-only","PipeName":"InputLift.Fn.0123456789abcdef0123456789abcdef","ProgressSequence":1,"State":"AwaitConsumer","Error":null,"KeyboardBound":false,"NeutralConfirmed":false,"UpdatedUtc":"2026-01-02T03:04:05.0000000Z"}
+}
+'@
+$decoded=$rawSnapshot | ConvertFrom-Json -Depth 12 -ErrorAction Stop
+Validate $decoded;Check $true 'Complete raw source JSON roundtrip validates through the real snapshot function'
+foreach($stamp in @('2026-01-02T05:04:05.0000000+02:00','2026-01-02T03:04:05.0000000','2026-01-02T03:03:59.0000000Z','2026-01-02T03:04:07.0000000Z')) {
+    $decoded=$rawSnapshot.Replace('2026-01-02T03:04:05.0000000Z',$stamp) | ConvertFrom-Json -Depth 12 -ErrorAction Stop
+    Refused { Validate $decoded } 'Raw JSON offsets/unspecified kinds and stale/future UTC values fail closed'
+}
+$decoded=$rawSnapshot.Replace('2026-01-02T03:04:05.0000000Z','2026-01-02T03:04:05.0000000+00:00') | ConvertFrom-Json -Depth 12 -ErrorAction Stop
+if($decoded.Status.UpdatedUtc -is [DateTime]) {
+    Refused { Validate $decoded } 'A zero-offset JSON value deserialized as Local still lacks the required UTC kind'
+} else {
+    Validate $decoded;Check $true 'A retained zero-offset JSON string follows the strict string contract'
+}
 $fixture=Fixture;Assert-BridgeSameEpoch $fixture.Active (Fixture).Active;Check $true 'Same validated source epoch accepted'
 foreach($field in @('RunNonce','TrayPid','TrayStartUtcTicks','GuardPid','GuardStartUtcTicks','WorkerPid','WorkerStartUtcTicks','GuardianPid','GuardianStartUtcTicks','BootUtcTicks')) {
     $first=(Fixture).Active;$second=(Fixture).Active
