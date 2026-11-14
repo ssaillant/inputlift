@@ -15,7 +15,8 @@ using Microsoft.Win32.SafeHandles;
 
 internal sealed class FnEventPipe : IDisposable
 {
-    private const uint OutboundOverlappedFirst = 1U | 0x40000000U | 0x00080000U;
+    // PIPE_ACCESS_OUTBOUND=0x2; 0x1 is INBOUND and cannot feed a read-only client.
+    private const uint OutboundOverlappedFirst = 2U | 0x40000000U | 0x00080000U;
     private const uint RejectRemoteClients = 8;
     private const int MaximumQueuedEdges=64, WriteTimeoutMilliseconds=500;
     [StructLayout(LayoutKind.Sequential)]
@@ -194,6 +195,7 @@ internal sealed class FnEventPipe : IDisposable
         foreach(long value in new[]{0L,-1L})
         { bool refused=false;try{Frame(value,"heartbeat",false);}catch(ArgumentException){refused=true;}check(refused,"Nonpositive sequence refused."); }
         check(SecurityDescriptor("S-1-5-21-1-2-3-1001")=="O:BAG:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GR;;;S-1-5-21-1-2-3-1001)","Only selected owner read, administrators and SYSTEM have pipe access.");
+        check((OutboundOverlappedFirst&3U)==2U,"Native pipe direction is outbound, not inbound or duplex.");
         check((OutboundOverlappedFirst&0x00080000U)!=0 && RejectRemoteClients==8,"First-instance and remote-client rejection flags fixed.");
         count=checks;return errors;
     }

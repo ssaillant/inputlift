@@ -124,12 +124,27 @@ internal static class NativePipeTests
         }
         Check(selected == 1 && system == 1 && administrators == 1, "Expected exactly selected-reader, SYSTEM and administrator grants.");
     }
-    private static void FirstInstance(string nonce)
+    private static void FirstInstance(string nonce, FnEventPipe initial)
     {
-        bool denied = false;
-        try { using (FnEventPipe duplicate = new FnEventPipe(nonce)) { } }
-        catch (System.ComponentModel.Win32Exception error) { denied = error.NativeErrorCode == 5; }
-        Check(denied, "A second production first-instance pipe must be rejected with access denied.");
+        bool denied = false, duplicateCreated = false;
+        string failureBefore = initial.Failure;
+        bool connectedBefore = initial.Connected;
+        string observedType = "none", observedMessage = null;
+        int? observedNativeCode = null;
+        try
+        {
+            using (FnEventPipe duplicate = new FnEventPipe(nonce)) { duplicateCreated = true; }
+        }
+        catch (Exception error)
+        {
+            observedType = error.GetType().FullName; observedMessage = error.Message;
+            System.ComponentModel.Win32Exception native = error as System.ComponentModel.Win32Exception;
+            if (native != null) { observedNativeCode = native.NativeErrorCode; denied = native.NativeErrorCode == 5; }
+        }
+        Check(denied, "A second production first-instance pipe must be rejected with access denied. Observed: " +
+            Json.Serialize(new { duplicateCreated = duplicateCreated, exceptionType = observedType, nativeErrorCode = observedNativeCode,
+                exceptionMessage = observedMessage, initialFailureBefore = failureBefore, initialConnectedBefore = connectedBefore,
+                initialFailureAfter = initial.Failure, initialConnectedAfter = initial.Connected }));
     }
     private static int Server(Options options)
     {
@@ -140,7 +155,7 @@ internal static class NativePipeTests
         using (FnEventPipe producer = new FnEventPipe(options.Nonce))
         {
             ActualAcl(producer, options.ReaderSid);
-            FirstInstance(options.Nonce);
+            FirstInstance(options.Nonce, producer);
             // Disconnected publication is deliberately not queued for a later reader.
             producer.Publish("heartbeat", true); producer.Publish("down", false); producer.Publish("up", true);
             using (Process process = Process.GetCurrentProcess())
