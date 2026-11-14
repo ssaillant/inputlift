@@ -12,8 +12,9 @@
   [Windows API contract](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createnamedpipea)
   requires outbound access for a read-only client; alpha.1's flag was wrong.
 - Add an eighth owned-stub check for stopping while held, plus hosted-only native
-  pipe fixtures. Native execution results must be checked in the validation
-  record; successful fixture compilation is not a native test pass.
+  pipe fixtures. All five native scenarios passed in
+  [hosted CI](https://github.com/ssaillant/inputlift/actions/runs/43625183677).
+  These use a test-only reader-identity shim, not a production installation.
 
 The installed event-only and physical Bluetooth path still needs validation.
 There is no independent tester or upstream acceptance claim.

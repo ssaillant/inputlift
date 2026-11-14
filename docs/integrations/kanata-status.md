@@ -1,16 +1,37 @@
 # Kanata candidate validation record
 
 This record separates observed results from release gates. It is not a hardware
-compatibility certificate. Source version: `0.1.0-alpha.1`. GitHub's
-[release page](https://github.com/ssaillant/inputlift/releases/tag/v0.1.0-alpha.1)
-is the authority for publication state; a version in this file alone is not a
-published release.
+compatibility certificate. The `0.1.0-alpha.2` source is prepared for publication;
+GitHub's release page is the authority for publication state. A version in this
+file alone is not a published release.
 
 The `0.1.0-alpha.2` candidate adds a protected-state launcher, graceful stop,
-and hosted-only native pipe fixtures. The launcher passes 98 pure checks without
-invoking its entrypoint or reading protected state. Native fixture execution,
-installed deployment, and physical-source results are separate gates; do not
-infer them from successful compilation or the earlier alpha.1 table below.
+and hosted-only native pipe fixtures. These gates are distinct from installed
+deployment and physical-source testing.
+
+## Alpha.2 observed evidence
+
+| Stage | Result and scope |
+|---|---|
+| Launcher | 98 pure metadata/policy checks pass; no entrypoint or protected-state read. |
+| Consumer lifecycle | 28 pure checks and eight owned-stub/process checks pass, including intentional stop while held and release through the worker's existing connection. |
+| Native pipe | Five cases passed in [hosted run 43625183677](https://github.com/ssaillant/inputlift/actions/runs/43625183677) at [`02543d4`](https://github.com/ssaillant/inputlift/commit/02543d493fff80cf21e5f42d45c35f83a7e87a4e): selected-user read, denied write, ordered frames/reset, disconnect/slow-reader handling, and bounded disposal. |
+| Native fixture boundary | Exact production pipe source with a test-only reader-identity shim; two CI accounts. It does not prove production's same-account elevation, installed image/metadata or remote SMB behavior. |
+| Native direction correction | Outbound access now uses the Windows-defined value `2`; alpha.1 used inbound `1` and must not be used for a physical event-only installation. |
+| Installed and physical path | Still unvalidated. No Bluetooth capture or native input is part of the hosted fixture. |
+| Independent tester/maintainer feedback | Recruitment/proposal remain open; no external validation or acceptance claimed. |
+
+The successful hosted result covers the strict coordinator assertions in that
+revision. The fixture deliberately separates duplicate-instance rejection from
+isolated first-instance-flag behavior: Windows returned `ERROR_PIPE_BUSY` (231)
+under the production one-instance limit, with the original producer healthy.
+The flag policy is source-checked; its isolated kernel cause is not claimed.
+
+## Alpha.1 baseline evidence (historical)
+
+The earlier real Kanata synthetic demo below remains baseline evidence. It does
+not validate the new physical path. Alpha.1's native-direction issue is also
+recorded on its [release page](https://github.com/ssaillant/inputlift/releases/tag/v0.1.0-alpha.1).
 
 | Stage | Evidence | Status |
 |---|---|---|
@@ -21,7 +42,7 @@ infer them from successful compilation or the earlier alpha.1 table below.
 | Consumer and supervision | 28 pure checks; seven owned-stub protocol/process checks, including consumer crash/hang and lost guardian heartbeats | Local pass |
 | Hosted checks for candidate | [`f8166d7`](https://github.com/ssaillant/inputlift/commit/f8166d7783350eca18daea8af244755b9805dd23), [successful run](https://github.com/ssaillant/inputlift/actions/runs/43622329855) | Pass, including all seven process checks under a temporary standard account |
 | Real Kanata synthetic demo | Official v1.12.0, base → lifted → base notifications; owned consumer and Kanata stopped | Local pass for layer lifecycle; physical typing and real-server crash recovery not tested |
-| Event-only installation/native IPC | Protected install and cross-integrity source authentication | Pending |
+| Event-only installation/native IPC | Native direction defect confirmed after publication | Do not use alpha.1 for this path |
 | Physical Bluetooth source | Connection/neutral, press/release, disconnect/reconnect and cleanup | Pending |
 | Upstream discussion | [Kanata Ideas #2247](https://github.com/jtroo/kanata/discussions/2247) | Proposal posted; no acceptance implied |
 | Independent tester | [Recruitment/report issue #1](https://github.com/ssaillant/inputlift/issues/1) | Open; no tester or independent results claimed |

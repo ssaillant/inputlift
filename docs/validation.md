@@ -27,7 +27,7 @@ optional runtime also runs capture, guard, tray and 30 setup-boundary checks;
 their generated reports give per-component counts. Some decoder checks run in
 both assemblies; these counts must not be described as distinct hardware tests.
 The Kanata build runs 28 pure checks. Its explicit transport mode additionally
-runs checks against an owned loopback stub, including supervised failure
+runs eight checks against an owned loopback stub, including supervised failure
 paths. That mode opens local sockets but does not connect to a real application
 or send native input. The synthetic packet verifier checks 28 steps across three
 scenarios through the public decoder and event adapter.
