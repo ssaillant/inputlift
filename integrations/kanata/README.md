@@ -30,6 +30,9 @@ kanata --check --cfg held-layer.kbd
 # Separate opt-in: bind explicitly to loopback, not a bare port number.
 kanata --cfg held-layer.kbd --port 127.0.0.1:7070
 InputLift.Kanata.exe --demo --port 7070 --virtual-key inputlift-fn
+# Optional manual test: time to focus a blank editor, then a five-second hold.
+InputLift.Kanata.exe --demo --port 7070 --virtual-key inputlift-fn `
+  --demo-countdown-ms 5000 --demo-hold-ms 5000
 ```
 
 `--demo` supplies synthetic reset/neutral/press/hold/release frames. It sends real
@@ -38,6 +41,18 @@ The sample maps A to A normally and A to B while the virtual key is held. The
 demo report retains only booleans for observed `base`, `lifted`, then `base`
 layer notifications. These are separate observations, not acknowledgements of
 the virtual-key commands or proof of physical keyboard behavior.
+
+The optional timing flags are accepted only by `--demo`. Countdown is 0–10000 ms
+(default 0); hold is 100–10000 ms (default 1000). Countdown begins after the
+worker connects and verifies Kanata, and sends neutral heartbeats before the
+single press. The held phase sends non-neutral heartbeats, then releases. Both
+waits check the existing supervisor link at intervals of at most 100 ms, subject
+to OS scheduling and I/O. Ctrl+C in the supervisor requests graceful release;
+the existing failure and cleanup limits below still apply. The ordinary demo's
+supervisor run window is the requested countdown plus hold plus five seconds of
+startup/completion allowance, followed by the existing bounded cleanup attempts.
+This does not widen bridge or deliberate fault-fixture timeouts. Defaults retain
+the original immediate one-second hold. See the [focused manual test](../../docs/integrations/kanata-demo-test.md).
 
 ## Live recovered-control input
 

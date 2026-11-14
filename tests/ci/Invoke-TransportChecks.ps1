@@ -124,13 +124,13 @@ try {
         } catch { if($drain.ElapsedMilliseconds -ge 2950) { throw } }
         if($null -eq $testReport) { Start-Sleep -Milliseconds 50 }
     }
-    if($null -eq $testReport -or $testReport.status -cne 'ok' -or $testReport.tests -ne 8 -or
+    if($null -eq $testReport -or $testReport.status -cne 'ok' -or $testReport.tests -ne 11 -or
        $testReport.mode -cne 'explicit-owned-loopback-stub' -or @($testReport.errors).Count -ne 0 -or
        $testReport.socketsOpened -isnot [bool] -or -not $testReport.socketsOpened -or
        $testReport.realApplicationConnected -isnot [bool] -or $testReport.realApplicationConnected -or
        $testReport.captureStarted -isnot [bool] -or $testReport.captureStarted -or
        $testReport.nativeInputSent -isnot [bool] -or $testReport.nativeInputSent) {
-        throw 'Transport report did not prove all eight owned-stub checks passed without real application/capture/native input.'
+        throw 'Transport report did not prove all eleven owned-stub checks passed without real application/capture/native input.'
     }
     if((Test-Path -LiteralPath $stderr) -and -not [string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $stderr -Raw))) {
         throw 'Standard-user transport checks wrote unexpected stderr; inspect ignored artifacts/ci output.'

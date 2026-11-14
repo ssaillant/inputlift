@@ -31,10 +31,15 @@ mode checks. The optional runtime build also runs 581 recovery checks: 358 pure
 policy checks across 21 scenarios, 214 actual JSON cases and nine completed-guard
 boundary cases against production code. These read no installed state and start no task,
 pipe, Bluetooth capture or native input. See [recovery limits](integrations/deskflow-recovery.md).
-The Kanata build runs 28 pure checks. Its explicit transport mode additionally
-runs eight checks against an owned loopback stub, including supervised failure
-paths. That mode opens local sockets but does not connect to a real application
-or send native input. The synthetic packet verifier checks 28 steps across three
+The Kanata build runs 73 pure checks, including fake-clock manual-demo timing,
+authenticated handoff and cancellation/release. All eleven explicit transport
+checks pass locally against an owned loopback stub, including supervised failure
+paths and three new timed-demo cases: normal completion, countdown cancellation
+without a press, and held cancellation with original-connection release before
+the scheduled up. An initial restricted-context loopback denial was resolved by
+rechecking the final binary in an authorized execution context, without changing
+Windows network settings. That mode opens local sockets but does not connect to
+a real application, start capture or send native input. The synthetic packet verifier checks 28 steps across three
 scenarios through the public decoder and event adapter.
 
 The normal-user bridge launcher's 111 pure metadata/policy checks are also part
@@ -95,10 +100,11 @@ establish the updated candidate's CI result.
 The newer Deskflow recovery port has local build/policy/JSON validation only;
 that historical hosted run does not cover it. The public package's fresh
 installation, reboot path and forced live timeout recovery remain unvalidated.
-An initial eight-case transport attempt was blocked by Windows loopback socket
+The earlier eight-case transport attempt was blocked by Windows loopback socket
 access errors, with dependent cases timing out. After execution-network
 permission was granted, the unchanged source passed all eight owned-loopback
-checks locally. No real application or native input was involved. Fresh hosted
+checks locally. That historical result is separate from the current eleven-case
+local pass above. No real application or native input was involved. Fresh hosted
 transport evidence is still required for the source revision to be published.
 
 The renamed/generalized live capture package, a fresh privileged installation, reconnect behavior and additional device profiles remain unvalidated in this public version. Keep these limits in compatibility and release notes; do not publish stable end-user binaries on the strength of pure checks alone.

@@ -20,11 +20,12 @@ namespace InputLift.Kanata
     {
         private const string Source = "recovered-control", Control = "fn";
         private static volatile bool cancelled;
-        private sealed class Options
+        internal sealed class Options
         {
             internal string Mode, Key, Pipe, Token, WorkerKind;
             internal int Port, CapturePid, GuardianPid;
             internal long CaptureStart, GuardianStart;
+            internal int DemoCountdownMilliseconds, DemoHoldMilliseconds = 1000;
             internal bool TestWithholdGuardianHeartbeat;
             internal Func<bool> TestRequestStop;
         }
@@ -62,6 +63,9 @@ namespace InputLift.Kanata
                 throw new InvalidOperationException("Run the Kanata consumer as your normal user, outside administrator PowerShell.");
         }
         private static Options Parse(string[] args)
+        { return ParseArguments(args, Console.IsInputRedirected, Console.IsOutputRedirected); }
+        // Pure argument validation; only Main supplies the actual inherited-pipe state.
+        internal static Options ParseArguments(string[] args, bool inputRedirected, bool outputRedirected)
         {
             if (args.Length == 0 || (args[0] != "--demo" && args[0] != "--bridge" && args[0] != "--worker"))
                 throw new ArgumentException("Use --self-test, --test-transport, --demo --port N --virtual-key NAME, or --bridge with authenticated capture parameters.");
@@ -72,7 +76,8 @@ namespace InputLift.Kanata
                 if (i + 1 == args.Length || values.ContainsKey(args[i])) throw new ArgumentException("Arguments require unique name/value pairs.");
                 string name = args[i];
                 if (name != "--port" && name != "--virtual-key" && name != "--capture-pipe" && name != "--capture-pid" &&
-                    name != "--capture-start" && name != "--guard-token" && name != "--guard-pid" && name != "--guard-start" && name != "--worker-kind")
+                    name != "--capture-start" && name != "--guard-token" && name != "--guard-pid" && name != "--guard-start" && name != "--worker-kind" &&
+                    name != "--demo-countdown-ms" && name != "--demo-hold-ms")
                     throw new ArgumentException("Unknown argument.");
                 values.Add(name, args[i + 1]);
             }
@@ -88,10 +93,15 @@ namespace InputLift.Kanata
                 if (result.WorkerKind != "demo" && result.WorkerKind != "bridge" && result.WorkerKind != "test-crash" &&
                     result.WorkerKind != "test-hang" && result.WorkerKind != "test-parent-timeout") throw new ArgumentException("Invalid worker kind.");
                 live = result.WorkerKind == "bridge";
-                if (!Console.IsInputRedirected || !Console.IsOutputRedirected) throw new ArgumentException("Worker mode requires the owning supervisor's inherited pipes.");
+                if (!inputRedirected || !outputRedirected) throw new ArgumentException("Worker mode requires the owning supervisor's inherited pipes.");
             }
             else foreach (string name in values.Keys)
                 if (name.StartsWith("--guard-", StringComparison.Ordinal) || name == "--worker-kind") throw new ArgumentException("Worker handoff options are not accepted by a supervisor.");
+            bool demo = result.Mode == "--demo" || (result.Mode == "--worker" && result.WorkerKind == "demo");
+            if (!demo && (values.ContainsKey("--demo-countdown-ms") || values.ContainsKey("--demo-hold-ms")))
+                throw new ArgumentException("Demo timing options are accepted only by the synthetic demo.");
+            result.DemoCountdownMilliseconds = DemoMilliseconds(values, "--demo-countdown-ms", 0, 0);
+            result.DemoHoldMilliseconds = DemoMilliseconds(values, "--demo-hold-ms", 1000, 100);
             if (live)
             {
                 result.Pipe = Value(values, "--capture-pipe");
@@ -102,6 +112,14 @@ namespace InputLift.Kanata
             else if (values.ContainsKey("--capture-pipe") || values.ContainsKey("--capture-pid") || values.ContainsKey("--capture-start"))
                 throw new ArgumentException("Synthetic demo does not accept capture parameters.");
             return result;
+        }
+        private static int DemoMilliseconds(Dictionary<string, string> values, string name, int defaultValue, int minimum)
+        {
+            string text; if (!values.TryGetValue(name, out text)) return defaultValue;
+            int value;
+            if (!int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out value) || value < minimum || value > 10000)
+                throw new ArgumentException("Invalid " + name + "; expected " + minimum + "..10000 milliseconds.");
+            return value;
         }
         private static string Value(Dictionary<string, string> values, string name)
         { string value; if (!values.TryGetValue(name, out value)) throw new ArgumentException("Missing " + name + "."); return value; }
@@ -114,14 +132,25 @@ namespace InputLift.Kanata
         private static string Quote(string value)
         { foreach (char c in value) if (!(char.IsLetterOrDigit(c) || c == '-' || c == '.' || c == '_')) throw new ArgumentException("Unsafe child argument."); return value; }
         private static string WorkerArguments(Options options, string token, Process guardian)
+        { return WorkerArguments(options, token, guardian.Id, guardian.StartTime.ToUniversalTime().Ticks); }
+        internal static string WorkerArguments(Options options, string token, int guardianPid, long guardianStart)
         {
             string kind = options.WorkerKind ?? (options.Mode == "--demo" ? "demo" : "bridge");
             string result = "--worker --port " + options.Port.ToString(CultureInfo.InvariantCulture) + " --virtual-key " + Quote(options.Key) +
-                " --guard-token " + token + " --guard-pid " + guardian.Id.ToString(CultureInfo.InvariantCulture) +
-                " --guard-start " + guardian.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture) + " --worker-kind " + kind;
+                " --guard-token " + token + " --guard-pid " + guardianPid.ToString(CultureInfo.InvariantCulture) +
+                " --guard-start " + guardianStart.ToString(CultureInfo.InvariantCulture) + " --worker-kind " + kind;
+            if (kind == "demo") result += " --demo-countdown-ms " + options.DemoCountdownMilliseconds.ToString(CultureInfo.InvariantCulture) +
+                " --demo-hold-ms " + options.DemoHoldMilliseconds.ToString(CultureInfo.InvariantCulture);
             if (options.Mode == "--bridge") result += " --capture-pipe " + Quote(options.Pipe) +
                 " --capture-pid " + options.CapturePid.ToString(CultureInfo.InvariantCulture) + " --capture-start " + options.CaptureStart.ToString(CultureInfo.InvariantCulture);
             return result;
+        }
+        internal static int DemoRunBudgetMilliseconds(Options options)
+        {
+            // Only the finite ordinary demo gets a total run window. Existing
+            // bridge and deliberate fault-fixture liveness budgets stay intact.
+            return options.Mode == "--demo" && (options.WorkerKind == null || options.WorkerKind == "demo") ?
+                options.DemoCountdownMilliseconds + options.DemoHoldMilliseconds + 5000 : 0;
         }
         private static string ReadBoundedLine(TextReader reader, int bound)
         {
@@ -153,6 +182,14 @@ namespace InputLift.Kanata
         {
             RequireNormalUser();
             return Guard(new Options { Mode = "--demo", Port = port, Key = "inputlift-fn", WorkerKind = "demo", TestRequestStop = requestStop });
+        }
+        internal static GuardReport GuardTimedDemoFixture(int port, int countdown, int hold, Func<bool> requestStop)
+        {
+            RequireNormalUser();
+            Options options = ParseArguments(new[] { "--demo", "--port", port.ToString(CultureInfo.InvariantCulture), "--virtual-key", "inputlift-fn",
+                "--demo-countdown-ms", countdown.ToString(CultureInfo.InvariantCulture), "--demo-hold-ms", hold.ToString(CultureInfo.InvariantCulture) }, false, false);
+            options.TestRequestStop = requestStop;
+            return Guard(options);
         }
         private static GuardReport Guard(Options options)
         {
@@ -210,12 +247,15 @@ namespace InputLift.Kanata
                 });
                 errorReader.IsBackground = true; errorReader.Name = "InputLift bounded child error"; errorReader.Start();
                 Stopwatch time = Stopwatch.StartNew(); long lastHeartbeat = -250;
+                int demoBudget = DemoRunBudgetMilliseconds(options);
                 while (!cancelled && !child.HasExited)
                 {
                     if (options.TestRequestStop != null && options.TestRequestStop()) { cancelled = true; break; }
                     lock (incoming.Gate) if (incoming.Failure != null) throw new IOException(incoming.Failure);
                     double age = (Stopwatch.GetTimestamp() - Interlocked.Read(ref incoming.LastProgress)) * 1000.0 / Stopwatch.Frequency;
                     if (age > 2500) throw new TimeoutException("Owned output-consumer heartbeat expired.");
+                    if (demoBudget != 0 && time.ElapsedMilliseconds > demoBudget)
+                        throw new TimeoutException("Synthetic demo exceeded its bounded run window.");
                     if (time.ElapsedMilliseconds - lastHeartbeat >= 250 &&
                         (!options.TestWithholdGuardianHeartbeat || time.ElapsedMilliseconds < 800))
                     {
@@ -329,7 +369,7 @@ namespace InputLift.Kanata
                     try
                     {
                         if (options.WorkerKind == "bridge") PipeFrames(options, watch, apply);
-                        else DemoFrames(options.WorkerKind, watch, apply);
+                        else DemoFrames(options, watch, apply);
                     }
                     finally
                     {
@@ -353,14 +393,54 @@ namespace InputLift.Kanata
             double age = last == 0 ? double.MaxValue : (Stopwatch.GetTimestamp() - last) * 1000.0 / Stopwatch.Frequency;
             if (link.Lost || age > 2000) throw new IOException("Guardian heartbeat ended; output consumer is stopping.");
         }
-        private static void DemoFrames(string kind, WorkerWatch watch, Action<string> apply)
+        private static void DemoFrames(Options options, WorkerWatch watch, Action<string> apply)
         {
+            string kind = options.WorkerKind;
+            if (kind == "demo")
+            {
+                Stopwatch time = Stopwatch.StartNew();
+                TimedDemoFrames(options.DemoCountdownMilliseconds, options.DemoHoldMilliseconds,
+                    delegate { return time.ElapsedMilliseconds; }, Thread.Sleep, watch.Check, apply);
+                return;
+            }
+            // Deliberate fault fixtures retain their original timing and paths.
             apply("ILFN1 1 reset 0"); apply("ILFN1 2 heartbeat 1"); apply("ILFN1 3 down 0");
             if (kind == "test-crash") Environment.Exit(23); // Intentional owned-stub fixture only: skips finally.
             if (kind == "test-hang") Thread.Sleep(10000); // Guardian must terminate its exact owned child.
             if (kind == "test-parent-timeout") while (true) { Thread.Sleep(100); watch.Check(); }
             for (int i = 0; i < 4; i++) { Thread.Sleep(250); apply("ILFN1 " + (4 + i) + " heartbeat 0"); }
             apply("ILFN1 8 up 1");
+        }
+        internal static void TimedDemoFrames(int countdownMilliseconds, int holdMilliseconds,
+            Func<long> milliseconds, Action<int> sleep, Action check, Action<string> apply)
+        {
+            if (countdownMilliseconds < 0 || countdownMilliseconds > 10000 || holdMilliseconds < 100 || holdMilliseconds > 10000)
+                throw new ArgumentOutOfRangeException("demo timing");
+            long sequence = 0, previous = milliseconds();
+            Func<long> now = delegate {
+                long value = milliseconds();
+                if (value < previous) throw new IOException("Synthetic demo clock moved backwards.");
+                previous = value; return value;
+            };
+            Action<string, bool> emit = delegate(string kind, bool neutral) {
+                check();
+                apply("ILFN1 " + (++sequence).ToString(CultureInfo.InvariantCulture) + " " + kind + (neutral ? " 1" : " 0"));
+            };
+            Action<int, bool> wait = delegate(int duration, bool neutral) {
+                long start = now();
+                while (true)
+                {
+                    check(); long elapsed = now() - start;
+                    if (elapsed >= duration) break;
+                    sleep((int)Math.Min(100, duration - elapsed));
+                    emit("heartbeat", neutral);
+                }
+            };
+            emit("reset", false); emit("heartbeat", true);
+            wait(countdownMilliseconds, true);
+            emit("down", false);
+            wait(holdMilliseconds, false);
+            emit("up", true);
         }
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint serverProcessId);

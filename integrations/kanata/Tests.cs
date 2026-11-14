@@ -42,6 +42,36 @@ namespace InputLift.Kanata
         private static InputEvent Down() { return InputEvent.Button("source", "fn", true, 1); }
         private static InputEvent Up() { return InputEvent.Button("source", "fn", false, 2); }
         private static KanataConsumer Consumer(Fake fake) { return new KanataConsumer(fake, "source", "fn"); }
+        private sealed class DemoClock
+        {
+            internal long Now;
+            internal int Checks;
+            internal Action OnCheck;
+            internal readonly List<int> Sleeps = new List<int>();
+            internal readonly List<CaptureFrame> Frames = new List<CaptureFrame>();
+            internal readonly List<long> FrameTimes = new List<long>();
+            internal void Run(int countdown, int hold, Fake transport)
+            {
+                using (KanataConsumer consumer = Consumer(transport))
+                {
+                    consumer.BeginSession();
+                    CaptureFrameConsumer frames = new CaptureFrameConsumer(consumer, "source", "fn");
+                    Program.TimedDemoFrames(countdown, hold, delegate { return Now; },
+                        delegate(int delay) { Sleeps.Add(delay); Now += delay; },
+                        delegate { Checks++; if (OnCheck != null) OnCheck(); },
+                        delegate(string text) { Frames.Add(CaptureFrame.Parse(text)); FrameTimes.Add(Now); frames.Accept(text); });
+                }
+            }
+            internal long TimeOf(string kind)
+            { for (int i = 0; i < Frames.Count; i++) if (Frames[i].Kind == kind) return FrameTimes[i]; throw new Exception("Missing " + kind + "."); }
+        }
+        private static Program.Options DemoOptions(params string[] extra)
+        {
+            List<string> args = new List<string>(new[] { "--demo", "--port", "7070", "--virtual-key", "inputlift-fn" });
+            args.AddRange(extra); return Program.ParseArguments(args.ToArray(), false, false);
+        }
+        private static Program.Options WorkerOptions(Program.Options supervisor, bool input, bool output)
+        { return Program.ParseArguments(Program.WorkerArguments(supervisor, new string('a', 32), 41, 42).Split(' '), input, output); }
 
         internal static int Pure()
         {
@@ -112,6 +142,114 @@ namespace InputLift.Kanata
                 Assert(KanataTcp.Parse("{\"LayerChange\":{\"new\":\"base\"}}").Count == 1, "Valid envelope rejected.");
                 Refused<IOException>(delegate { KanataTcp.Parse("[]"); }); Refused<IOException>(delegate { KanataTcp.Parse("{\"a\":1,\"b\":2}"); }); });
             Check("Kanata line bound", delegate { Refused<IOException>(delegate { KanataTcp.Parse(new string('x', KanataTcp.MaximumLineBytes + 1)); }); });
+            Check("demo defaults retain immediate one-second hold", delegate {
+                Program.Options options = DemoOptions();
+                Assert(options.DemoCountdownMilliseconds == 0 && options.DemoHoldMilliseconds == 1000, "Historical timing changed."); });
+            Check("demo timing lower boundaries accepted", delegate {
+                Program.Options options = DemoOptions("--demo-countdown-ms", "0", "--demo-hold-ms", "100");
+                Assert(options.DemoCountdownMilliseconds == 0 && options.DemoHoldMilliseconds == 100, "Minimum timing rejected."); });
+            Check("demo timing upper boundaries accepted", delegate {
+                Program.Options options = DemoOptions("--demo-countdown-ms", "10000", "--demo-hold-ms", "10000");
+                Assert(options.DemoCountdownMilliseconds == 10000 && options.DemoHoldMilliseconds == 10000, "Maximum timing rejected."); });
+            foreach (string invalid in new[] { "-1", "10001", "2147483648", "+1", " 1", "1 ", "1.0", "", "x" })
+            {
+                string value = invalid;
+                Check("demo countdown refuses invalid value " + value, delegate { Refused<ArgumentException>(delegate { DemoOptions("--demo-countdown-ms", value); }); });
+            }
+            foreach (string invalid in new[] { "0", "99", "-1", "10001", "2147483648", "+100", "100 ", "1.0", "", "x" })
+            {
+                string value = invalid;
+                Check("demo hold refuses invalid value " + value, delegate { Refused<ArgumentException>(delegate { DemoOptions("--demo-hold-ms", value); }); });
+            }
+            Check("demo timing refuses duplicate or missing values", delegate {
+                Refused<ArgumentException>(delegate { DemoOptions("--demo-countdown-ms", "1", "--demo-countdown-ms", "2"); });
+                Refused<ArgumentException>(delegate { DemoOptions("--demo-hold-ms"); }); });
+            Check("demo timing survives authenticated worker handoff", delegate {
+                Program.Options worker = WorkerOptions(DemoOptions("--demo-countdown-ms", "5000", "--demo-hold-ms", "7500"), true, true);
+                Assert(worker.WorkerKind == "demo" && worker.DemoCountdownMilliseconds == 5000 && worker.DemoHoldMilliseconds == 7500 &&
+                    worker.Token == new string('a', 32) && worker.GuardianPid == 41 && worker.GuardianStart == 42, "Worker timing or authentication fields changed."); });
+            Check("default demo handoff retains timing", delegate {
+                Program.Options worker = WorkerOptions(DemoOptions(), true, true);
+                Assert(worker.DemoCountdownMilliseconds == 0 && worker.DemoHoldMilliseconds == 1000, "Default worker timing changed."); });
+            Check("demo worker still requires both inherited pipes", delegate {
+                Refused<ArgumentException>(delegate { WorkerOptions(DemoOptions(), false, true); });
+                Refused<ArgumentException>(delegate { WorkerOptions(DemoOptions(), true, false); }); });
+            Check("supervisor refuses worker handoff fields", delegate {
+                Refused<ArgumentException>(delegate { DemoOptions("--guard-token", new string('a', 32)); }); });
+            Check("bridge rejects demo timing", delegate {
+                Refused<ArgumentException>(delegate { Program.ParseArguments(new[] { "--bridge", "--port", "7070", "--virtual-key", "inputlift-fn", "--demo-hold-ms", "5000" }, false, false); }); });
+            foreach (string kind in new[] { "bridge", "test-crash", "test-hang", "test-parent-timeout" })
+            {
+                string selected = kind;
+                Check("non-demo worker rejects timing " + selected, delegate {
+                    string arguments = "--worker --port 7070 --virtual-key inputlift-fn --guard-token " + new string('a', 32) +
+                        " --guard-pid 41 --guard-start 42 --worker-kind " + selected + " --demo-countdown-ms 0";
+                    Refused<ArgumentException>(delegate { Program.ParseArguments(arguments.Split(' '), true, true); }); });
+            }
+            Check("fault handoff omits demo timing", delegate {
+                Program.Options options = DemoOptions(); options.WorkerKind = "test-hang";
+                string arguments = Program.WorkerArguments(options, new string('a', 32), 41, 42);
+                Assert(arguments.IndexOf("--demo-", StringComparison.Ordinal) < 0 && WorkerOptions(options, true, true).WorkerKind == "test-hang", "Fault-fixture timing changed."); });
+            Check("bridge handoff preserves capture identity without demo timing", delegate {
+                Program.Options options = Program.ParseArguments(new[] { "--bridge", "--port", "7070", "--virtual-key", "inputlift-fn",
+                    "--capture-pipe", "InputLift.Fn." + new string('b', 32), "--capture-pid", "43", "--capture-start", "44" }, false, false);
+                string arguments = Program.WorkerArguments(options, new string('a', 32), 41, 42);
+                Program.Options worker = WorkerOptions(options, true, true);
+                Assert(arguments.IndexOf("--demo-", StringComparison.Ordinal) < 0 && worker.WorkerKind == "bridge" &&
+                    worker.Pipe == options.Pipe && worker.CapturePid == 43 && worker.CaptureStart == 44, "Bridge handoff changed."); });
+            Check("demo total budget covers only selected window plus overhead", delegate {
+                Assert(Program.DemoRunBudgetMilliseconds(DemoOptions()) == 6000 &&
+                    Program.DemoRunBudgetMilliseconds(DemoOptions("--demo-countdown-ms", "10000", "--demo-hold-ms", "10000")) == 25000,
+                    "Demo supervisor budget does not follow bounded timing."); });
+            Check("bridge and fault budgets remain unchanged", delegate {
+                foreach (string kind in new[] { "test-crash", "test-hang", "test-parent-timeout" }) {
+                    Program.Options options = DemoOptions(); options.WorkerKind = kind;
+                    Assert(Program.DemoRunBudgetMilliseconds(options) == 0, "Fault budget was widened."); }
+                Program.Options bridge = DemoOptions(); bridge.Mode = "--bridge";
+                Assert(Program.DemoRunBudgetMilliseconds(bridge) == 0, "Bridge budget was widened."); });
+            Check("default timed demo presses immediately and releases at one second", delegate {
+                DemoClock clock = new DemoClock(); Fake fake = new Fake(); clock.Run(0, 1000, fake);
+                Assert(clock.TimeOf("down") == 0 && clock.TimeOf("up") == 1000 && clock.Now == 1000 &&
+                    fake.Actions.Count == 3 && fake.Actions[1] == KeyAction.Press && fake.Actions[2] == KeyAction.Release, "Default phase timing or actions changed."); });
+            Check("manual demo holds neutral during countdown then releases on schedule", delegate {
+                DemoClock clock = new DemoClock(); Fake fake = new Fake(); clock.Run(5000, 5000, fake);
+                Assert(clock.TimeOf("down") == 5000 && clock.TimeOf("up") == 10000 && fake.Actions.Count == 3, "Manual timing or single hold/release changed.");
+                for (int i = 0; i < clock.Frames.Count; i++) {
+                    CaptureFrame frame = clock.Frames[i];
+                    Assert(frame.Sequence == i + 1, "Sequence is not contiguous.");
+                    if (frame.Kind == "heartbeat") Assert(frame.Neutral == (clock.FrameTimes[i] <= 5000), "Countdown/hold heartbeat has wrong state."); }
+                foreach (int delay in clock.Sleeps) Assert(delay > 0 && delay <= 100, "Uninterruptible wait slice exceeded its bound."); });
+            Check("maximum manual demo finishes within configured twenty seconds", delegate {
+                DemoClock clock = new DemoClock(); clock.Run(10000, 10000, new Fake());
+                Assert(clock.TimeOf("down") == 10000 && clock.TimeOf("up") == 20000 && clock.Now == 20000, "Maximum window was exceeded."); });
+            Check("non-round demo duration is not rounded up", delegate {
+                DemoClock clock = new DemoClock(); clock.Run(17, 137, new Fake());
+                Assert(clock.TimeOf("down") == 17 && clock.TimeOf("up") == 154, "Sleep slicing extended requested phases."); });
+            Check("cancellation during countdown sends no press", delegate {
+                DemoClock clock = new DemoClock(); Fake fake = new Fake();
+                clock.OnCheck = delegate { if (clock.Now >= 200) throw new OperationCanceledException(); };
+                Refused<OperationCanceledException>(delegate { clock.Run(5000, 5000, fake); });
+                Assert(clock.Now == 200 && fake.Actions.Count == 1 && fake.Closed, "Countdown cancellation pressed or failed to dispose."); });
+            Check("cancellation during hold releases owned action once", delegate {
+                DemoClock clock = new DemoClock(); Fake fake = new Fake();
+                clock.OnCheck = delegate { if (clock.Now >= 5200) throw new OperationCanceledException(); };
+                Refused<OperationCanceledException>(delegate { clock.Run(5000, 5000, fake); });
+                Assert(clock.Now == 5200 && fake.Actions.Count == 3 && fake.Actions[2] == KeyAction.Release && fake.Closed, "Hold cancellation did not release/dispose once."); });
+            Check("guardian failure during manual hold propagates and releases", delegate {
+                DemoClock clock = new DemoClock(); Fake fake = new Fake();
+                clock.OnCheck = delegate { if (clock.Now >= 200) throw new IOException("simulated guardian heartbeat loss"); };
+                Refused<IOException>(delegate { clock.Run(0, 10000, fake); });
+                Assert(fake.Actions.Count == 3 && fake.Actions[2] == KeyAction.Release && fake.Closed, "Liveness failure left held output."); });
+            Check("demo clock regression stops before output press", delegate {
+                long time = 2; int applied = 0;
+                Refused<IOException>(delegate { Program.TimedDemoFrames(100, 100, delegate { return time--; }, delegate(int delay) { }, delegate { }, delegate(string text) { applied++; }); });
+                Assert(applied == 2, "Regressed clock reached a down frame."); });
+            Check("timed-demo entry refuses out-of-range window before frames", delegate {
+                foreach (int[] timing in new[] { new[] { -1, 100 }, new[] { 10001, 100 }, new[] { 0, 99 }, new[] { 0, 10001 } }) {
+                    int applied = 0;
+                    Refused<ArgumentOutOfRangeException>(delegate { Program.TimedDemoFrames(timing[0], timing[1], delegate { return 0; }, delegate(int delay) { }, delegate { }, delegate(string text) { applied++; }); });
+                    Assert(applied == 0, "Invalid direct timing emitted frames."); }
+            });
             return Report("pure-self-test", false);
         }
         private static void ConsumerWithInvalidSource() { new KanataConsumer(new Fake(), "private address", "fn"); }
@@ -124,6 +262,7 @@ namespace InputLift.Kanata
             private readonly List<Thread> handlers = new List<Thread>();
             internal readonly List<string> Actions = new List<string>();
             private readonly List<string> firstConnectionActions = new List<string>();
+            private readonly List<long> firstConnectionTimes = new List<long>();
             internal int Port;
             internal string Failure;
             private readonly bool includeKey, errorOnPress;
@@ -174,7 +313,7 @@ namespace InputLift.Kanata
                                 Assert((string)body["name"] == "inputlift-fn", "Wrong virtual key on wire.");
                                 string action = (string)body["action"];
                                 Assert(action == "Press" || action == "Release", "Wrong action on wire.");
-                                lock (Actions) { Actions.Add(action); if (firstConnection) firstConnectionActions.Add(action); }
+                                lock (Actions) { Actions.Add(action); if (firstConnection) { firstConnectionActions.Add(action); firstConnectionTimes.Add(Stopwatch.GetTimestamp()); } }
                                 if (errorOnPress && action == "Press") writer.WriteLine("{\"Error\":{\"msg\":\"simulated action error\"}}");
                             }
                         }
@@ -184,6 +323,7 @@ namespace InputLift.Kanata
             }
             internal string[] ActionSnapshot() { lock (Actions) return Actions.ToArray(); }
             internal string[] FirstConnectionSnapshot() { lock (Actions) return firstConnectionActions.ToArray(); }
+            internal long[] FirstConnectionTimes() { lock (Actions) return firstConnectionTimes.ToArray(); }
             public void Dispose()
             {
                 listener.Stop(); server.Join(1500);
@@ -196,6 +336,8 @@ namespace InputLift.Kanata
         }
         private static void WaitUntil(Func<bool> condition)
         { Stopwatch timer = Stopwatch.StartNew(); while (!condition() && timer.ElapsedMilliseconds < 2000) Thread.Sleep(10); Assert(condition(), "Condition timed out."); }
+        private static double MillisecondsBetween(long first, long second)
+        { return (second - first) * 1000.0 / Stopwatch.Frequency; }
         internal static int Transport()
         {
             checks = 0; errors.Clear();
@@ -270,6 +412,52 @@ namespace InputLift.Kanata
                         "Intentional cancellation was reported as failure: " + result.error);
                     Assert(press >= 0 && Array.IndexOf(workerActions, "Release", press + 1) > press,
                         "Worker did not release on its original connection before graceful exit.");
+                }
+            });
+            Check("timed demo reaches one held phase through authenticated worker", delegate {
+                using (Stub stub = new Stub(true, false))
+                {
+                    Program.GuardReport result = Program.GuardTimedDemoFixture(stub.Port, 250, 250, null);
+                    Assert(result.status == "ok" && result.error == null && result.ownedChildStopped && !result.ownedChildTerminated &&
+                        result.finalReleaseSent && stub.Failure == null, "Timed guarded demo failed: " + result.error);
+                    WaitUntil(delegate { return stub.ActionSnapshot().Length >= 7; });
+                    string[] actions = stub.FirstConnectionSnapshot(); long[] times = stub.FirstConnectionTimes();
+                    Assert(string.Join(",", actions) == "Release,Press,Release,Release", "Timed demo did not send one press, scheduled release and final cleanup release.");
+                    Assert(MillisecondsBetween(times[0], times[1]) >= 200 && MillisecondsBetween(times[1], times[2]) >= 200,
+                        "Countdown or hold was lost during the actual worker handoff.");
+                }
+            });
+            Check("graceful cancellation during timed countdown never presses", delegate {
+                using (Stub stub = new Stub(true, false))
+                {
+                    bool requested = false;
+                    Program.GuardReport result = Program.GuardTimedDemoFixture(stub.Port, 800, 100,
+                        delegate {
+                            long[] times = stub.FirstConnectionTimes();
+                            if (times.Length == 0 || MillisecondsBetween(times[0], Stopwatch.GetTimestamp()) < 100) return false;
+                            requested = true; return true;
+                        });
+                    Assert(requested && result.status == "ok" && result.error == null && result.ownedChildStopped &&
+                        !result.ownedChildTerminated && result.finalReleaseSent && stub.Failure == null,
+                        "Timed countdown cancellation failed: " + result.error);
+                    WaitUntil(delegate { return stub.ActionSnapshot().Length >= 5; });
+                    string[] actions = stub.FirstConnectionSnapshot();
+                    Assert(string.Join(",", actions) == "Release,Release", "Countdown stop pressed or skipped original-connection final release.");
+                }
+            });
+            Check("graceful cancellation during timed hold runs production release", delegate {
+                using (Stub stub = new Stub(true, false))
+                {
+                    bool requested = false;
+                    Program.GuardReport result = Program.GuardTimedDemoFixture(stub.Port, 100, 900,
+                        delegate { requested = Array.IndexOf(stub.FirstConnectionSnapshot(), "Press") >= 0; return requested; });
+                    Assert(requested && result.status == "ok" && result.error == null && result.ownedChildStopped &&
+                        !result.ownedChildTerminated && result.finalReleaseSent && stub.Failure == null,
+                        "Timed hold cancellation failed: " + result.error);
+                    WaitUntil(delegate { return stub.ActionSnapshot().Length >= 7; });
+                    string[] actions = stub.FirstConnectionSnapshot(); long[] times = stub.FirstConnectionTimes();
+                    Assert(string.Join(",", actions) == "Release,Press,Release,Release" && MillisecondsBetween(times[1], times[2]) < 800,
+                        "Worker failed to release on its original connection before the scheduled up, without forced termination.");
                 }
             });
             return Report("explicit-owned-loopback-stub", true);

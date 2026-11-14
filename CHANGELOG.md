@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add optional bounded countdown and hold timings for the synthetic Kanata demo,
+  with supervised cancellation tests and a focused manual tester checklist.
 - Retry only transient status-file replacement conflicts within a short window;
   preserve last-good snapshots and the progress watchdog when publication is deferred.
 - Attempt owned logging-flag restoration before child/output/trace teardown and

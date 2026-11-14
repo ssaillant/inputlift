@@ -14,7 +14,8 @@ deployment and physical-source testing.
 | Stage | Result and scope |
 |---|---|
 | Launcher | 111 pure metadata/policy checks pass locally, including the JSON timestamp boundary; no entrypoint or protected-state read. A fresh hosted run is required. |
-| Consumer lifecycle | 28 pure checks and all eight owned-stub/process checks pass locally, including intentional stop while held. The initial restricted-network attempt and its resolved recheck are recorded below. |
+| Consumer lifecycle | 73 pure checks and all eleven owned-stub/process checks pass locally. The expanded suite includes timed-demo success and graceful stop during countdown and hold through the actual supervised worker. The earlier eight-case result remains historical. |
+| Manual demo timing | Optional 0–10000 ms countdown and 100–10000 ms hold; defaults remain 0/1000 ms. Fake-clock and owned-stub checks pass. Actual blank-editor mapping and independent testing remain unvalidated for this timed path. |
 | Native pipe | Five cases passed in [hosted run 43625183677](https://github.com/ssaillant/inputlift/actions/runs/43625183677) at [`02543d4`](https://github.com/ssaillant/inputlift/commit/02543d493fff80cf21e5f42d45c35f83a7e87a4e): selected-user read, denied write, ordered frames/reset, disconnect/slow-reader handling, and bounded disposal. |
 | Native fixture boundary | Exact production pipe source with a test-only reader-identity shim; two CI accounts. It does not prove production's same-account elevation, installed image/metadata or remote SMB behavior. |
 | Native direction correction | Outbound access now uses the Windows-defined value `2`; alpha.1 used inbound `1` and must not be used for a physical event-only installation. |
@@ -24,6 +25,18 @@ deployment and physical-source testing.
 The successful hosted result covers the strict coordinator assertions in that
 revision, before the UTC timestamp fix. The updated 111-check launcher suite has
 local validation only; the current candidate needs a fresh hosted run.
+The updated consumer's 73-check pure suite and eleven-case process suite have
+local validation only; neither updates the earlier real-Kanata baseline.
+The three added process cases verify timed-demo success, countdown cancellation
+without a press, and hold cancellation with release on the worker's original
+connection before its scheduled up. The final rebuilt executable passed all
+eleven cases without connecting to a real application, starting capture or
+sending native input.
+An initial run in a restricted execution context was denied loopback socket
+access with the same Windows access-permission error below; dependent cases
+timed out. Rechecking in an authorized execution context passed without changing
+Windows network settings. That denial was an execution boundary, not a code
+failure. A fresh hosted run is still required for this revision.
 The fixture deliberately separates duplicate-instance rejection from
 isolated first-instance-flag behavior: Windows returned `ERROR_PIPE_BUSY` (231)
 under the production one-instance limit, with the original producer healthy.

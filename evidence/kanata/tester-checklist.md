@@ -8,19 +8,18 @@ Record the InputLift commit/tag, Kanata version, Windows version and the exact t
 
 For a real Kanata test, use an official binary obtained independently with the tester's approval, or a binary they built. Do not redistribute an unreviewed executable in this evidence package. Validate the supplied example with `--check` before starting Kanata. Use only `--port 127.0.0.1:7070`; do not open a network/firewall exception.
 
-The interactive demonstration changes keyboard behavior while Kanata is running. Use a blank local editor, save work first and keep an independent way to stop the programs. Start with synthetic input to the real consumer before enabling hardware acquisition. Follow the integration's current commands; a mock server alone cannot establish Kanata compatibility.
+The interactive demonstration changes keyboard behavior while Kanata is running. Use a blank local editor, save work first and keep an independent way to stop the programs. Start with synthetic input to the real consumer before enabling hardware acquisition. Follow the [focused manual test](../../docs/integrations/kanata-demo-test.md), which provides an optional five-second countdown and five-second hold so there is time to focus the editor. The default demo still presses immediately and holds for one second. A mock server alone cannot establish Kanata compatibility.
 
 Report whether:
 
 - The dedicated virtual key is discovered and a normal `a` stays `a` when inactive.
 - A press activates the demonstration layer; `a` becomes `b` while held.
 - A release restores `a` without a stuck state.
-- Duplicate presses do not latch extra state.
-- Reset, stream termination and transport loss end activity or produce a visible recovery requirement.
-- Restart/reconnect requires neutral input before a fresh activation.
-- Stopping the companion does not leave a held action; if it does, record exactly how recovery worked.
+- The companion finishes and stopping Kanata clears any remaining uncertain state; if recovery was needed, record the bounded error and recovery action.
 
-Do not infer success from a clean socket write. Record the editor's output and layer behavior. If a failure occurs, stop and report its exact wording and reproduction sequence rather than repeatedly relaunching.
+Keep duplicate, reset, source-loss, transport-loss, neutral rearming and worker-failure results separate: pure and owned-stub checks exercise those paths, while the focused real-server test exercises normal baseline/hold/release only. Additional real-server failure tests require a separately reviewed plan.
+
+Do not infer success from a clean socket write. Report the observed A/B mapping and layer behavior without attaching editor content. If a failure occurs, stop and report its exact wording and reproduction sequence rather than repeatedly relaunching.
 
 ## Stage 2: supported hardware acquisition
 

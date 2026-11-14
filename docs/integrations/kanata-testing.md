@@ -10,15 +10,20 @@ Kanata v1.12.0. It does not require a particular physical keyboard. Build the
 companion and run its pure tests. Validate `integrations/kanata/held-layer.kbd`
 with Kanata's `--check --cfg` before considering an interactive remapping test.
 
-An interactive synthetic demo should establish:
+For the interactive stage, follow the [focused manual demo](kanata-demo-test.md).
+Its optional five-second countdown gives time to focus the blank editor before
+the five-second synthetic hold. The original immediate one-second demo remains
+the default. An interactive synthetic demo should establish:
 
 - Baseline: `a` produces `a`.
 - During a companion-owned virtual-key hold, `a` produces `b`.
 - After release/reset, `a` produces `a` again.
-- Duplicate down/up input does not toggle or repeat the held action.
-- Source loss and the demonstrated worker-failure path release the layer or
-  report an explicit unconfirmed release and require recovery.
-- Kanata termination stops the companion; no press is replayed on a later start.
+
+The pure and owned-stub checks cover duplicate down/up input, worker failure,
+lost heartbeats and graceful cancellation separately. Those automated results
+do not establish failure recovery in real Kanata. Any real-server failure or
+termination test needs a separately reviewed plan; the focused manual demo
+tests normal baseline/hold/release only.
 
 Use a blank text editor and save work first. The configuration is intentionally
 limited to a visible letter mapping. A process kill, OS failure, or inaccessible

@@ -12,6 +12,10 @@ example configuration changes `a` to `b` while that virtual key holds the
 `lifted` layer; releasing the control restores `a`. Application actions and
 gesture interpretation remain in Kanata configuration.
 
+Start with the [focused synthetic demo](kanata-demo-test.md), which provides an
+optional countdown and longer hold for the blank-editor test. It uses no
+Bluetooth acquisition or privileged installation.
+
 ```text
 Selected Bluetooth fields → InputLift event-only capture
                         → protected local Fn-state pipe
