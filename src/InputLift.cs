@@ -3,6 +3,7 @@
 // Tray/status frontend. The installed guard owns capture and cleanup. Preview
 // and self-test modes never start a guard, task, hook, ETW or registry operation.
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -25,8 +26,10 @@ using Microsoft.Win32;
 internal static class InputLift
 {
     private static string TaskName { get { return DailyPaths.TaskName; } }
-    private static readonly string EventPrefix=@"Local\InputLift."+DailyPaths.OwnerSid;
-    private static readonly string MutexName=EventPrefix+".ui";
+    // Resolve account-bound names only in live modes. Pure classifier tests
+    // must not initialize Windows identity, events or a tray as a side effect.
+    private static string EventPrefix { get { return @"Local\InputLift."+DailyPaths.OwnerSid; } }
+    private static string MutexName { get { return EventPrefix+".ui"; } }
     private static JavaScriptSerializer Serializer() { return new JavaScriptSerializer { MaxJsonLength=1048576 }; }
     private static string Json(object value) { return Serializer().Serialize(value); }
     private static string Describe(Exception error)
@@ -215,6 +218,36 @@ internal static class InputLift
     }
     private static bool Bool(IDictionary<string,object> values,string name)
     { object value;return values!=null && values.TryGetValue(name,out value) && value is bool && (bool)value; }
+    private static bool False(IDictionary<string,object> values,string name)
+    { object value;return values!=null && values.TryGetValue(name,out value) && value is bool && !(bool)value; }
+    private static bool TextEquals(IDictionary<string,object> values,string name,string expected)
+    { object value;return values!=null && values.TryGetValue(name,out value) && value is string && (string)value==expected; }
+    private static bool OnlyError(IDictionary<string,object> values,string expected)
+    {
+        object errors;
+        if(values==null || !values.TryGetValue("errors",out errors) || errors is string || !(errors is IEnumerable)) return false;
+        int count=0;
+        foreach(object error in (IEnumerable)errors) { if(!(error is string) || (string)error!=expected) return false;count++; }
+        return count==1;
+    }
+    // Only this exact, completely cleaned watchdog outcome is eligible. A
+    // native-input failure, extra diagnostic error or ambiguous teardown stays
+    // stopped. A route disconnect or remote sleep is not inferred here.
+    internal static bool IsCleanProgressTimeout(string outputMode,ActiveRun active,IDictionary<string,object> result,IDictionary<string,object> guardian)
+    {
+        return outputMode=="deskflow" && active!=null && active.Version==1 && DailyPaths.ValidNonce(active.RunNonce) &&
+            active.TrayPid>0 && active.TrayStartUtcTicks>0 && active.GuardPid>0 && active.GuardStartUtcTicks>0 &&
+            active.WorkerPid>0 && active.WorkerStartUtcTicks>0 && active.GuardianPid>0 && active.GuardianStartUtcTicks>0 && active.BootUtcTicks>0 &&
+            ResultIdentityValid(active,result) && MakeCleanup(active,result,null).Clean &&
+            TextEquals(result,"mode","daily-globe-guard") && TextEquals(result,"status","error") && False(result,"guardianTerminatedForRecovery") &&
+            Bool(result,"childCompleted") && Number(result,"childExitCode")==0 &&
+            Bool(result,"aggregateOutputComplete") && Bool(result,"stdoutEofConfirmed") && Bool(result,"stderrEofConfirmed") &&
+            OnlyError(result,"Guardian exited with code 1; inspect its exact cleanup errors in the guardian journal.") &&
+            TextEquals(guardian,"mode","daily-guardian") && TextEquals(guardian,"nonce",active.RunNonce) && TextEquals(guardian,"trigger","worker-progress-failed") &&
+            Bool(guardian,"registryAbsenceConfirmed") && Bool(guardian,"ownedTraceStoppedOrAbsent") &&
+            Bool(guardian,"childQuiescenceConfirmed") && Bool(guardian,"shortcutReleaseConfirmed") &&
+            OnlyError(guardian,"Worker progress did not advance for 15 seconds; owned capture is being stopped.");
+    }
     private static long Number(IDictionary<string,object> values,string name)
     { object value;if(values==null || !values.TryGetValue(name,out value) || !(value is int || value is long)) return long.MinValue;return Convert.ToInt64(value,CultureInfo.InvariantCulture); }
     private static bool ResultIdentityValid(ActiveRun active,IDictionary<string,object> result)
@@ -240,6 +273,25 @@ internal static class InputLift
         }
         return proof;
     }
+    // An exited guard is a completed generation even when its journals cannot
+    // prove child/trace/output cleanup. The policy keeps that safety block
+    // separately from live guard ownership; no proof is invented here.
+    internal static RecoveryTermination FinishedGuardTermination(long generation,RecoveryCause cause,
+        bool identityValid,CleanupProof proof,bool guardianExited,bool onlyClassifiedError)
+    {
+        return new RecoveryTermination(generation,cause,identityValid,proof!=null&&proof.Clean,
+            proof!=null&&proof.RegistryAbsenceConfirmed,proof!=null&&proof.OwnedTraceStoppedOrAbsent,
+            proof!=null&&proof.ChildQuiescenceConfirmed,proof!=null&&proof.ShortcutReleaseConfirmed,
+            true,guardianExited,onlyClassifiedError);
+    }
+    internal static CleanupProof FailureCleanupProof(ActiveRun active,CleanupProof proof,string error)
+    {
+        // A later probe/UI error cannot revoke authoritative cleanup evidence.
+        // Return no replacement rather than overwriting a verified clean file.
+        if(active==null || (proof!=null&&proof.Clean)) return null;
+        CleanupProof unconfirmed=proof??MakeCleanup(active,null,error);unconfirmed.Error=error;
+        return unconfirmed;
+    }
     private static void WriteProtectedJson(string filename,object value)
     {
         DailyPaths.WriteTextProtected(Path.Combine(DailyPaths.StateDirectory,filename),Json(value),true);
@@ -255,19 +307,23 @@ internal static class InputLift
         Color blue=Color.FromArgb(42,92,190),green=Color.FromArgb(28,125,83),amber=Color.FromArgb(157,98,20),red=Color.FromArgb(174,48,48);
         switch(state)
         {
-            case "Starting":return new ViewState("Starting","Preparing Globe support. No console window needs to stay open.",blue);
+            case "Starting":return new ViewState("Starting","Preparing Fn support. No console window needs to stay open.",blue);
             case "WaitingForKeyboard":return new ViewState("Switch the configured keyboard off","Switch the configured keyboard OFF. Leave it OFF until the helper tells you to turn it on. Keep it paired to this Windows host.",amber);
             case "WaitingForDisconnect":return new ViewState("Keep the keyboard off","Windows is releasing the Bluetooth connection. Leave the configured keyboard OFF and wait for the turn-on instruction.",amber);
             case "TurnKeyboardOn":return new ViewState("Turn the configured keyboard on","Switch the keyboard ON and tap Shift once. Then wait for the helper to identify it.",amber);
             case "WaitingForIdentification":return new ViewState("Wake the keyboard with Shift","Tap Shift once on the configured keyboard and wait for Keyboard identified. Keep the keyboard paired to this Windows host.",amber);
-            case "AwaitNeutral":return new ViewState("Release Globe","Release Globe and tap Shift once so the helper can confirm a clean starting state.",amber);
+            case "AwaitNeutral":return new ViewState("Release Fn","Release Fn and tap Shift once so the helper can confirm a clean starting state.",amber);
             case "Ready":return new ViewState("Fn is ready on the client","Fn presses and releases are forwarded as Mouse 5 while the pointer is on the remote client.",green);
-            case "PausedOnHost":return new ViewState("Ready — pointer is on the host","Move the pointer onto the Deskflow client to forward Fn as Mouse 5. Fn is ignored on this Windows host.",blue);
+            case "PausedOnHost":return new ViewState("Ready — waiting for client pointer","Wake or reconnect the Deskflow client, then move the pointer onto it. Bluetooth capture stays active; release Fn before trying again.",blue);
+            case "WaitingForDeskflow":return new ViewState("Waiting for Deskflow","Fn output is paused while Deskflow is unavailable. Bluetooth identification is retained. It resumes when Deskflow is available and Fn is released.",amber);
+            case "AwaitRouteNeutral":return new ViewState("Release Fn to resume","Deskflow is available. Release Fn before starting a new action; a held press is never replayed.",amber);
+            case "RecoveryWaiting":return new ViewState("Waiting to recover","The stalled worker stopped and cleanup is verified. Waiting for Deskflow before one automatic restart. Keyboard identification may be needed afterward.",amber);
+            case "Recovering":return new ViewState("Recovering Fn support","Starting one fresh listener after verified cleanup. Follow the keyboard identification prompt if shown.",blue);
             case "AwaitConsumer":return new ViewState("Waiting for the local event consumer","Start the reviewed event consumer. The producer sends only Fn state through a protected local pipe; it does not press keys.",amber);
             case "EventsReady":return new ViewState("Fn events are ready","The local consumer receives Fn press, release and reset state. Its own status must confirm any mapped action.",green);
             case "Stopping":return new ViewState("Stopping","Closing Bluetooth capture. Please wait for producer cleanup confirmation and check the consumer's mapped action separately.",amber);
             case "Stopped":return new ViewState("Stopped — restart required","Cleanup is verified. Use Windows Start → Power → Restart to fully clear Bluetooth logging.",amber);
-            case "Idle":return new ViewState("Stopped","Click Start when you want Globe support. Closing this window leaves the tray controls available.",blue);
+            case "Idle":return new ViewState("Stopped","Click Start when you want Fn support. Closing this window leaves the tray controls available.",blue);
             case "Error":return new ViewState("Needs attention",string.IsNullOrEmpty(error)?"The helper could not continue. No automatic retry was attempted.":error,red);
             default:return new ViewState("Needs attention","Unknown helper state: "+state,red);
         }
@@ -312,11 +368,11 @@ internal static class InputLift
                 return parameters;
             }
         }
-        internal void SetState(ViewState state,long physical,long output,bool running,bool stopping)
+        internal void SetState(ViewState state,long physical,long output,bool running,bool stopping,bool startBlocked=false)
         {
             statusTitle.Text=state.Title;statusDetail.Text=state.Detail;stateColor=state.Color;statusCard.Invalidate();
             counters.Text="Fn presses detected: "+physical+"     Mapped presses completed: "+output;
-            startButton.Enabled=!running && !stopping;stopButton.Enabled=running && !stopping;
+            startButton.Enabled=!running && !stopping && !startBlocked;stopButton.Enabled=running && !stopping;
         }
         internal void Present() { Show();WindowState=FormWindowState.Normal;Activate(); }
     }
@@ -338,6 +394,12 @@ internal static class InputLift
         private string state="Starting",lastError;
         private long physical,output,lastSequence;
         private bool startPending=true,stopRequested,exitRequested,doneSignalled,finalized,disposed;
+        private volatile bool sessionEnding;
+        private readonly CaptureRecoveryPolicy recovery=new CaptureRecoveryPolicy();
+        private DeskflowRouteProbe recoveryProbe;
+        private bool recoveryPending;
+        private long generation;
+        private string sessionManifestHash,sessionConsentHash,sessionOutputMode;
         private readonly Stopwatch stopClock=new Stopwatch();
         internal int ExitCode;
         internal TrayContext()
@@ -353,22 +415,23 @@ internal static class InputLift
             form=new StatusForm(StartCapture,delegate{RequestStop(false,false);},delegate{menu.Show(form,new Point(280,318));},false,DailyPaths.ReadConfiguredOutputMode());
             icon=new NotifyIcon { Icon=SystemIcons.Application,Text="InputLift — starting",Visible=true,ContextMenuStrip=menu };
             icon.DoubleClick+=delegate{form.Present();};
-            timer=new System.Windows.Forms.Timer { Interval=500 };timer.Tick+=Tick;timer.Start();
+            timer=new System.Windows.Forms.Timer { Interval=250 };timer.Tick+=Tick;timer.Start();
             SystemEvents.SessionEnding+=OnSessionEnding;
         }
         private void OnSessionEnding(object sender,SessionEndingEventArgs e)
         {
             // This system callback may run off the UI thread. Close only the
             // matching backend lease; never wait for UI or cancel Windows exit.
+            sessionEnding=true;
             try { SignalDone(); } catch { /* Independent guardian also watches UI lifetime. */ }
         }
         private void Display(string next,string error)
         {
             state=next;if(error!=null) lastError=error;
-            ViewState view=MapState(next,error);bool running=guard!=null && !finalized;
-            form.SetState(view,physical,output,running,stopRequested && !finalized);
-            string tip="Bluetooth Fn: "+view.Title;icon.Text=tip.Length>63?tip.Substring(0,63):tip;
-            bool waiting=next=="WaitingForKeyboard" || next=="WaitingForDisconnect" || next=="TurnKeyboardOn" || next=="WaitingForIdentification" || next=="AwaitNeutral";
+            ViewState view=MapState(next,error);bool running=(guard!=null && !finalized) || recoveryPending;
+            form.SetState(view,physical,output,running,stopRequested && !finalized,recovery.CleanupUnconfirmed);
+            string tip="InputLift: "+view.Title;icon.Text=tip.Length>63?tip.Substring(0,63):tip;
+            bool waiting=next=="WaitingForKeyboard" || next=="WaitingForDisconnect" || next=="TurnKeyboardOn" || next=="WaitingForIdentification" || next=="AwaitNeutral" || next=="WaitingForDeskflow" || next=="AwaitRouteNeutral" || next=="RecoveryWaiting";
             icon.Icon=next=="Error"?SystemIcons.Error:waiting || next=="Stopping" || next=="Stopped"?SystemIcons.Warning:SystemIcons.Information;
             if(waiting && announcedWaiting.Add(next))
             {
@@ -376,15 +439,44 @@ internal static class InputLift
             }
         }
         private void StartCapture()
+        { StartCapture(false); }
+        private void StartCapture(bool automatic)
         {
-            if(guard!=null && !finalized) return;
+            if(sessionEnding || (guard!=null && !finalized)) return;
+            bool backendLaunched=false;
             try
             {
                 DailyPaths.RequireInstalledCodePaths();InstallManifest manifest=ReadManifest();
+                string manifestHash=Hash(Path.Combine(DailyPaths.StateDirectory,"install-manifest.json"));
+                string consentPath=Path.Combine(DailyPaths.StateDirectory,"consent.json");
+                DailyPaths.RequireProtectedMetadataFile(consentPath);
+                string consentHash=Hash(consentPath);
+                if(automatic)
+                {
+                    if(sessionOutputMode!="deskflow" || DailyPaths.NormalizeOutputMode(manifest.OutputMode)!="deskflow")
+                        throw new InvalidOperationException("Automatic capture recovery is available only for Deskflow output.");
+                    if(manifestHash!=sessionManifestHash || consentHash!=sessionConsentHash)
+                        throw new InvalidOperationException("Protected installation or consent changed. Automatic recovery is refused.");
+                    WithOwnedTask(manifest,delegate(object task) {
+                        if(!(bool)((dynamic)task).Enabled) throw new InvalidOperationException("Automatic startup was disabled; automatic recovery is cancelled.");
+                    });
+                }
+                else
+                {
+                    recovery.BeginEnabledSession();sessionManifestHash=manifestHash;sessionConsentHash=consentHash;
+                    sessionOutputMode=DailyPaths.NormalizeOutputMode(manifest.OutputMode);
+                }
+                recoveryPending=false;
+                if(recoveryProbe!=null) recoveryProbe.SetPollingEnabled(false);
                 stopRequested=exitRequested=doneSignalled=finalized=false;ExitCode=0;lastError=null;active=null;lastSequence=physical=output=0;stopClock.Reset();
                 announcedWaiting.Clear();
                 lock(outputGate) guardErrors.Clear();
                 if(guard!=null) { guard.Dispose();guard=null; }
+                if(sessionEnding || stopEvent.WaitOne(0))
+                {
+                    recovery.StopByUser();startPending=false;finalized=true;exitRequested=true;
+                    ExitThread();return;
+                }
                 string arguments="--run-daily --keyboard-address "+manifest.KeyboardAddress.ToUpperInvariant()+" --expected-probe-sha256 "+CaptureHash(manifest)+
                     " --tray-pid "+trayPid.ToString(CultureInfo.InvariantCulture)+" --tray-start "+trayTicks.ToString(CultureInfo.InvariantCulture)+
                     " --output-mode "+DailyPaths.NormalizeOutputMode(manifest.OutputMode);
@@ -397,12 +489,22 @@ internal static class InputLift
                 launched.ErrorDataReceived+=delegate(object sender,DataReceivedEventArgs e) {
                     if(e.Data!=null) lock(outputGate) { if(guardErrors.Count<16) guardErrors.Add(e.Data.Length<=4096?e.Data:e.Data.Substring(0,4096)); }
                 };
+                if(sessionEnding || stopEvent.WaitOne(0))
+                {
+                    launched.Dispose();recovery.StopByUser();startPending=false;finalized=true;exitRequested=true;
+                    ExitThread();return;
+                }
                 if(!launched.Start()) { launched.Dispose();throw new InvalidOperationException("The protected guard did not start."); }
-                guard=launched;guardTicks=guard.StartTime.ToUniversalTime().Ticks;
+                guard=launched;backendLaunched=true;
+                recovery.CaptureStarted(++generation);
+                guardTicks=guard.StartTime.ToUniversalTime().Ticks;
                 guard.BeginOutputReadLine();guard.BeginErrorReadLine();Display("Starting",null);
             }
             catch(Exception error)
             {
+                if(automatic && !backendLaunched) recovery.AutomaticStartFailed();
+                recovery.StopByUser();recoveryPending=false;
+                if(recoveryProbe!=null) recoveryProbe.SetPollingEnabled(false);
                 Display("Error",Describe(error));
                 if(guard!=null && !finalized) RequestStop(true,false);
             }
@@ -426,11 +528,15 @@ internal static class InputLift
         }
         private void RequestStop(bool exit,bool disable)
         {
+            // Explicit Stop, Exit, shutdown and any safety stop cancel pending
+            // recovery before touching the task or signalling the owned guard.
+            recovery.StopByUser();recoveryPending=false;startPending=false;
+            if(recoveryProbe!=null) recoveryProbe.SetPollingEnabled(false);
             try
             {
                 if(disable) { InstallManifest manifest=ReadManifest();WithOwnedTask(manifest,delegate(object task){((dynamic)task).Enabled=false;}); }
                 if(exit) exitRequested=true;
-                if(guard==null || finalized) { if(exitRequested) ExitThread();return; }
+                if(guard==null || finalized) { if(exitRequested) ExitThread();else Display(active==null?"Idle":"Stopped",null);return; }
                 stopRequested=true;if(!stopClock.IsRunning) stopClock.Start();Display("Stopping",null);SignalDone();
             }
             catch(Exception error) { Display("Error",Describe(error));if(exit) { ExitCode=1;ExitThread(); } }
@@ -438,6 +544,11 @@ internal static class InputLift
         private void FinishGuard()
         {
             if(finalized) return;finalized=true;
+            // Tick calls this only after this exact retained guard HasExited.
+            // Retain verified proof across later UI/probe failures, and record
+            // every completed owned generation exactly once.
+            bool completionRecorded=false,identityValid=false,guardianExited=false;
+            CleanupProof proof=null;
             try
             {
                 if(active==null) active=ReadActive();
@@ -446,25 +557,64 @@ internal static class InputLift
                 if(!File.Exists(resultPath)) throw new InvalidOperationException("Guard exited without its result file; cleanup is unconfirmed.");
                 var result=Serializer().Deserialize<Dictionary<string,object>>(DailyPaths.ReadTextShared(resultPath,1048576));
                 if(!ResultIdentityValid(active,result)) throw new InvalidOperationException("Guard result identity differs from the active run; cleanup is unconfirmed.");
-                CleanupProof proof=MakeCleanup(active,result,lastError);
+                identityValid=true;guardianExited=Bool(result,"guardianConfirmedExited");
+                proof=MakeCleanup(active,result,lastError);
                 WriteProtectedJson("cleanup.json",proof);
                 if(!proof.Clean) throw new InvalidOperationException("Guard did not confirm registry, trace, worker and Mouse5 cleanup. Restart is required; retain the installed files.");
                 object statusValue;string guardState=result.TryGetValue("status",out statusValue)?Convert.ToString(statusValue,CultureInfo.InvariantCulture):"error";
+                bool noOtherError;
+                lock(outputGate) noOtherError=guardErrors.Count==0;
+                Dictionary<string,object> guardian=null;
+                if(sessionOutputMode=="deskflow" && guard.ExitCode==1 && !stopRequested && !exitRequested && !sessionEnding && string.IsNullOrEmpty(lastError) && noOtherError)
+                {
+                    string guardianPath=DailyPaths.FileFor(active.RunNonce,".guardian.json");
+                    if(File.Exists(guardianPath)) guardian=Serializer().Deserialize<Dictionary<string,object>>(DailyPaths.ReadTextShared(guardianPath,65536));
+                }
+                bool eligible=guardian!=null && IsCleanProgressTimeout(sessionOutputMode,active,result,guardian);
+                completionRecorded=true;
+                recovery.CaptureTerminated(FinishedGuardTermination(generation,
+                    eligible?RecoveryCause.WorkerProgressTimeout:stopRequested?RecoveryCause.UserStop:RecoveryCause.Unknown,
+                    identityValid,proof,guardianExited,eligible),DeskflowRouteProbe.MonotonicMilliseconds());
                 if(guard.ExitCode!=0 || guardState!="ok")
                 {
+                    if(recovery.RecoveryQueued)
+                    {
+                        if(recoveryProbe==null) recoveryProbe=DeskflowRouteProbe.Start();
+                        else recoveryProbe.SetPollingEnabled(true);
+                        recoveryPending=true;
+                        Display("RecoveryWaiting",null);return;
+                    }
                     string detail=lastError;
                     object messages;
                     if(string.IsNullOrEmpty(detail) && result.TryGetValue("errors",out messages)) detail=Json(messages);
                     if(string.IsNullOrEmpty(detail)) lock(outputGate) detail=string.Join("; ",guardErrors.ToArray());
                     Display("Error",string.IsNullOrEmpty(detail)?"The helper stopped with an error. Cleanup is verified; restart the host before troubleshooting.":detail+" Cleanup is verified; restart the host.");ExitCode=1;
                 }
-                else Display("Stopped",null);
+                else
+                {
+                    recovery.StopByUser();recoveryPending=false;Display("Stopped",null);
+                }
             }
             catch(Exception error)
             {
-                lastError=Describe(error);Display("Error",lastError);ExitCode=1;
-                if(active!=null)
-                { try { WriteProtectedJson("cleanup.json",MakeCleanup(active,null,lastError)); } catch { /* No false clean proof is written. */ } }
+                if(!completionRecorded)
+                {
+                    completionRecorded=true;
+                    recovery.CaptureTerminated(FinishedGuardTermination(generation,
+                        stopRequested?RecoveryCause.UserStop:RecoveryCause.Unknown,
+                        identityValid,proof,guardianExited,false),DeskflowRouteProbe.MonotonicMilliseconds());
+                }
+                recovery.StopByUser();recoveryPending=false;
+                if(recoveryProbe!=null) recoveryProbe.SetPollingEnabled(false);
+                lastError=Describe(error);
+                if(recovery.CleanupUnconfirmed) lastError+=" Cleanup is unconfirmed. Restart Windows before starting another capture.";
+                Display("Error",lastError);ExitCode=1;
+                CleanupProof failureProof=FailureCleanupProof(active,proof,lastError);
+                if(failureProof!=null)
+                {
+                    try { WriteProtectedJson("cleanup.json",failureProof); }
+                    catch { /* No false clean proof is written. */ }
+                }
             }
             if(exitRequested) ExitThread();
         }
@@ -473,8 +623,23 @@ internal static class InputLift
             try
             {
                 if(showEvent.WaitOne(0)) form.Present();
-                if(stopEvent.WaitOne(0)) RequestStop(true,false);
+                if(stopEvent.WaitOne(0)) { RequestStop(true,false);return; }
+                if(sessionEnding) { RequestStop(true,false);return; }
                 if(startPending) { startPending=false;StartCapture(); }
+                if(recoveryPending)
+                {
+                    DeskflowRouteProbe.Snapshot route=recoveryProbe.Read();
+                    RecoveryDecision decision=recovery.Tick(DeskflowRouteProbe.MonotonicMilliseconds(),
+                        route.Fresh && route.ServerPresent && route.CoreWindowResponsive,route.ObservedMonotonicMilliseconds);
+                    if(decision.Action==RecoveryAction.StartFreshCapture) { Display("Recovering",null);StartCapture(true); }
+                    else if(decision.Action==RecoveryAction.NeedsAttention)
+                    {
+                        recovery.StopByUser();recoveryPending=false;
+                        recoveryProbe.SetPollingEnabled(false);
+                        Display("Error","Automatic recovery stopped. Use Start to begin a new session after reviewing the failure.");
+                    }
+                    return;
+                }
                 if(guard==null || finalized) return;
                 ActiveRun candidate=ReadActive();if(candidate!=null) active=candidate;
                 if(stopRequested) { SignalDone();if(stopClock.ElapsedMilliseconds>30000 && exitRequested) { ExitCode=1;Display("Error","Cleanup is not confirmed after 30 seconds. The guardian will observe this UI exit; verify cleanup before restarting.");ExitThread();return; } }
@@ -496,6 +661,8 @@ internal static class InputLift
             }
             catch(Exception error)
             {
+                recovery.StopByUser();recoveryPending=false;startPending=false;
+                if(recoveryProbe!=null) recoveryProbe.SetPollingEnabled(false);
                 lastError=Describe(error);Display("Error",lastError);
                 if(guard!=null && !finalized) RequestStop(false,false);
             }
@@ -504,12 +671,15 @@ internal static class InputLift
         {
             // No broad process termination. If proof is missing, the independent
             // guardian sees the tray process end and attempts its own cleanup.
+            recovery.StopByUser();recoveryPending=false;
+            if(recoveryProbe!=null) { recoveryProbe.Dispose();recoveryProbe=null; }
             timer.Stop();icon.Visible=false;exitedEvent.Set();base.ExitThreadCore();
         }
         protected override void Dispose(bool disposing)
         {
             if(disposing && !disposed)
             {
+                if(recoveryProbe!=null) { recoveryProbe.Dispose();recoveryProbe=null; }
                 disposed=true;SystemEvents.SessionEnding-=OnSessionEnding;timer.Stop();timer.Dispose();icon.Visible=false;icon.Dispose();menu.Dispose();form.Dispose();
                 showEvent.Dispose();stopEvent.Dispose();exitedEvent.Dispose();if(guard!=null) guard.Dispose();
             }
@@ -554,7 +724,7 @@ internal static class InputLift
         foreach(string[] bad in new[]{new string[0],new[]{"--tray","extra"},new[]{"--start","cmd"},new[]{"--render-preview","relative.png"},new[]{"--render-preview",@"C:\preview.exe"}})
             check(Parse(bad)==Mode.Invalid,"Unknown or arbitrary live invocation refused");
         check(Parse(new[]{"--render-preview",@"C:\preview.png"})==Mode.Preview,"Absolute PNG-only preview accepted");
-        foreach(string state in new[]{"Starting","WaitingForKeyboard","WaitingForDisconnect","TurnKeyboardOn","WaitingForIdentification","AwaitNeutral","Ready","PausedOnHost","AwaitConsumer","EventsReady","Stopping","Stopped","Idle","Error"})
+        foreach(string state in new[]{"Starting","WaitingForKeyboard","WaitingForDisconnect","TurnKeyboardOn","WaitingForIdentification","AwaitNeutral","Ready","PausedOnHost","WaitingForDeskflow","AwaitRouteNeutral","RecoveryWaiting","Recovering","AwaitConsumer","EventsReady","Stopping","Stopped","Idle","Error"})
         { ViewState view=MapState(state,null);check(!string.IsNullOrEmpty(view.Title)&&!string.IsNullOrEmpty(view.Detail),"Known state has plain user-facing status"); }
         check(MapState("Error","Exact failure").Detail=="Exact failure","Exact errors are retained");
         check(MapState("WaitingForKeyboard",null).Detail.Contains("OFF") && MapState("WaitingForDisconnect",null).Detail.Contains("OFF"),"Initial reconnect states keep physical power OFF");

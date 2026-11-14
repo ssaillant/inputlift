@@ -27,6 +27,12 @@ Stopping removes the owned logging flag and trace, but the driver may retain its
 - Background tray controls, optional status window, logon startup and independent cleanup supervision.
 - Re-identification and neutral-state requirements after connection or channel changes.
 
+Ordinary Deskflow route loss now pauses output while retaining Bluetooth
+identification. A separate, bounded retry handles only a fully cleaned worker
+timeout. See [disconnect and worker recovery](deskflow-recovery.md) for exact
+conditions, held-key behavior and startup limitations. Cold-start connection
+bootstrap remains separate; unattended keyboard identification is not promised.
+
 The output is an ordinary mouse-button signal. Any downstream action depends on the receiving software's bindings and behavior; application-specific shortcuts and gesture semantics are outside this project's scope. The Deskflow gate is a compatibility heuristic, not an authenticated remote-focus signal.
 
 See [compatibility](../compatibility.md) for the required profile and radio IDs. Other profiles, radios, architectures and integration versions are unverified. Wired input is outside the current scope.

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Keep Bluetooth acquisition and identification alive while Deskflow output is
+  unavailable; release owned output and rearm after neutral without replaying a held press.
+- Move Deskflow discovery to one reusable background probe, with expiring
+  observations and same-epoch admission checks around hook preparation.
+- Add one guarded retry for the exact fully cleaned worker-progress timeout;
+  preserve explicit Stop, installation/consent identity and existing watchdog limits.
+- Add pure recovery and production JSON-boundary regressions. These behaviors
+  are limited to `deskflow` mode; the core, event-only pipe and Kanata lifecycle remain separate.
+
 ## 0.1.0-alpha.2
 
 - Add default read-only protected-state inspection and an explicit `-Connect`

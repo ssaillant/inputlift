@@ -26,6 +26,11 @@ The default build exercises 72 core checks and 22 synthetic-example checks. The
 optional runtime also runs capture, guard, tray and 30 setup-boundary checks;
 their generated reports give per-component counts. Some decoder checks run in
 both assemblies; these counts must not be described as distinct hardware tests.
+The recovery port adds 29 synthetic probe/admission checks and 22 capture-status
+mode checks. The optional runtime build also runs 581 recovery checks: 358 pure
+policy checks across 21 scenarios, 214 actual JSON cases and nine completed-guard
+boundary cases against production code. These read no installed state and start no task,
+pipe, Bluetooth capture or native input. See [recovery limits](integrations/deskflow-recovery.md).
 The Kanata build runs 28 pure checks. Its explicit transport mode additionally
 runs eight checks against an owned loopback stub, including supervised failure
 paths. That mode opens local sockets but does not connect to a real application
@@ -77,5 +82,12 @@ passed at [`02543d4`](https://github.com/ssaillant/inputlift/commit/02543d493fff
 before the UTC timestamp fix and expanded 111-check launcher suite. Those changes
 have local validation only and need a fresh hosted run; local success does not
 establish the updated candidate's CI result.
+
+The newer Deskflow recovery port has local build/policy/JSON validation only;
+that historical hosted run does not cover it. The public package's fresh
+installation, reboot path and forced live timeout recovery remain unvalidated.
+The local eight-case transport attempt was blocked by Windows loopback socket
+access errors, with dependent cases timing out. It is recorded as a failed
+validation attempt, not a pass; fresh hosted transport evidence is required.
 
 The renamed/generalized live capture package, a fresh privileged installation, reconnect behavior and additional device profiles remain unvalidated in this public version. Keep these limits in compatibility and release notes; do not publish stable end-user binaries on the strength of pure checks alone.

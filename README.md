@@ -84,6 +84,12 @@ The core exposes press/release/reset transitions. Tap, hold, toggle and multi-pr
 
 This also builds the Windows x64 capture/runtime package and runs its pure checks. It does not install or start live capture.
 
+The Deskflow output mode retains Bluetooth identification through ordinary
+route loss and resumes after neutral input. Its bounded worker-timeout recovery
+has strict cleanup requirements; see [recovery behavior and limits](docs/integrations/deskflow-recovery.md).
+This does not remove cold-start keyboard identification or add automatic
+reconnection to the event-only/Kanata path.
+
 The included live backend requires **administrator privileges, sensitive Windows Bluetooth logging and an unsupported private driver-refresh request**. Other local tracers could access keyboard reports and Bluetooth encryption keys. Clearing the driver's cached logging state requires a true Windows Restart.
 
 These requirements apply to the optional backend, not to the pure event model, decoder or examples. Read [SECURITY.md](SECURITY.md) and the [Deskflow integration guide](docs/integrations/deskflow.md) before considering a live run.

@@ -178,6 +178,7 @@ internal static class GlobeEtwFnProbe
         private readonly string outputMode;
         private BridgeOwnership ownership;
         private bool neutralReady;
+        private readonly RelayRoutePolicy routePolicy=new RelayRoutePolicy();
         private long retiredDowns,retiredPairs,physicalDownCount,progressSequence,lastStatusMilliseconds=-1000;
         private readonly int workerPid=Process.GetCurrentProcess().Id;
         private readonly long workerStart=Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks;
@@ -262,6 +263,20 @@ internal static class GlobeEtwFnProbe
             relay.InitializeJournal();
         }
 
+        // Every caller holds gate. Snapshot reads never perform process/window
+        // discovery on the capture path. Event-only output does not use this gate.
+        private void UpdateRouteAdmission()
+        {
+            if(outputMode!="deskflow" || mouseOutput==null)return;
+            var route=mouseOutput.RouteSnapshot;
+            bool available=mouseOutput.HookHealthy&&route.CanStartPress;
+            if(routePolicy.ObserveRoute(available,route.Epoch,neutralReady))
+            { AbortShortcut("deskflow-route-unavailable-or-changed");neutralReady=false; }
+            if(!neutralReady && !failed && !cleaned && !stopRequested.WaitOne(0) && ownership!=null && !ownership.LeaseEnded &&
+                routePolicy.CanArm(decoder.Bound,decoder.FnDown))
+            { ResetRelayAfterNeutral();neutralReady=true; }
+        }
+
         private void PublishStatus(bool force)
         {
             long now=elapsed.ElapsedMilliseconds;
@@ -269,11 +284,12 @@ internal static class GlobeEtwFnProbe
             object status;
             lock(gate)
             {
+                var route=outputMode=="deskflow" && mouseOutput!=null?mouseOutput.RouteSnapshot:null;
                 string reconnectState=null;
                 if(!failed && !cleaned)
                     reconnectState=reconnectGuide.Observe(decoder.Bound || KeyboardConnectionState.ReadConnected(),now,decoder.Bound);
-                string state=failed ? "Error" : cleaned ? "Stopped" : outputMode=="events-only" && (eventPipe==null || !eventPipe.Connected) ? "AwaitConsumer" : !decoder.Bound ? reconnectState :
-                    !neutralReady ? "AwaitNeutral" : outputMode=="events-only" ? "EventsReady" : mouseOutput!=null && mouseOutput.CanStartPress ? "Ready" : "PausedOnHost";
+                string state=CaptureState(outputMode,failed,cleaned,eventPipe!=null&&eventPipe.Connected,decoder.Bound,reconnectState,
+                    neutralReady,mouseOutput!=null&&mouseOutput.HookHealthy,route);
                 string error=failures.Count==0 ? null : failures[failures.Count-1].Stage+": "+failures[failures.Count-1].Message;
                 var current=relay==null ? null : relay.Snapshot();
                 status=new { Nonce=SessionGuid(sessionName).ToString("N"),WorkerPid=workerPid,WorkerStartUtcTicks=workerStart,
@@ -281,7 +297,12 @@ internal static class GlobeEtwFnProbe
                     ProgressSequence=++progressSequence,State=state,Error=error,
                     PhysicalGlobePresses=physicalDownCount,OutputPresses=retiredDowns+(current==null?0:current.ChordsStarted),
                     OutputPairs=retiredPairs+(current==null?0:current.ChordsReleased),KeyboardBound=decoder.Bound,
-                    NeutralConfirmed=neutralReady,RestartRequired=true,UpdatedUtc=DateTime.UtcNow.ToString("o") };
+                    NeutralConfirmed=neutralReady,RestartRequired=true,UpdatedUtc=DateTime.UtcNow.ToString("o"),
+                    RouteFresh=route!=null&&route.Fresh,RouteReason=route==null?null:route.Reason.ToString(),
+                    RouteProbeStage=route==null?null:route.Stage.ToString(),
+                    RouteProbeAgeMilliseconds=route==null?(long?)null:route.AgeMilliseconds,
+                    RouteProbeQueryMilliseconds=route==null?(long?)null:route.QueryDurationMilliseconds,
+                    RouteEpoch=route==null?(long?)null:route.Epoch };
             }
             string path=DailyPaths.FileFor(SessionGuid(sessionName).ToString("N"),".status.json");
             DailyPaths.WriteTextProtected(path,new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(status),false);
@@ -307,7 +328,7 @@ internal static class GlobeEtwFnProbe
             long now=DateTime.UtcNow.ToFileTimeUtc();
             minimumEventFileTime=now;
             AbortShortcut("system-suspend-or-clock-gap");
-            neutralReady=false; keyboardAnnounced=false;
+            neutralReady=false;if(outputMode=="deskflow")routePolicy.ResetPhysical();keyboardAnnounced=false;
             reconnectGuide.Reset();
             RecordEdges(decoder.Reset(now,"system-suspend-or-clock-gap"),now,true);
         }
@@ -321,7 +342,7 @@ internal static class GlobeEtwFnProbe
                     DeliveredTime = delivered, Reason = edge.Reason, Source = edge.Source, DiagnosticReset = reset });
                 if(edge.Source!="vendor-ff01-usage3") continue;
                 if(reset || (edge.Reason!="globe-down" && edge.Reason!="globe-up"))
-                { AbortShortcut("target-reset-or-disconnect"); neutralReady=false; continue; }
+                { AbortShortcut("target-reset-or-disconnect");neutralReady=false;if(outputMode=="deskflow")routePolicy.ResetPhysical();continue; }
                 if(edge.Down) physicalDownCount++;
                 if((relay==null && eventPipe==null) || !neutralReady) continue;
                 if(edge.Down)
@@ -375,6 +396,7 @@ internal static class GlobeEtwFnProbe
                 lock (gate)
                 {
                     CheckContinuity();
+                    UpdateRouteAdmission();
                     if(header.EventTimeFileTime<minimumEventFileTime) { preResetEventsDropped++; return; }
                     connectionDiagnostics.Observe(type,packetLength,selectedByteReader);
                     bool previouslyBound=decoder.Bound;
@@ -382,10 +404,12 @@ internal static class GlobeEtwFnProbe
                     long acceptedBefore=decoder.AcceptedKeyboardReports;
                     var sourceEdges=decoder.Process(type, packetLength, selectedByteReader, header.EventTimeFileTime);
                     if(SourceEpochChanged(previouslyBound,decoder.Bound,previousChannelEpoch,decoder.BoundChannelCount))
-                    { AbortShortcut("keyboard-channel-changed"); neutralReady=false; keyboardAnnounced=false; }
-                    if(decoder.Bound && !neutralReady && decoder.AcceptedKeyboardReports>acceptedBefore && !decoder.FnDown && !failed && !cleaned && !ownership.LeaseEnded)
+                    { AbortShortcut("keyboard-channel-changed");neutralReady=false;if(outputMode=="deskflow")routePolicy.ResetPhysical();keyboardAnnounced=false; }
+                    if(outputMode=="deskflow" && decoder.Bound && decoder.AcceptedKeyboardReports>acceptedBefore)routePolicy.ObservePhysical(decoder.FnDown);
+                    UpdateRouteAdmission();
+                    if(outputMode=="events-only" && decoder.Bound && !neutralReady && decoder.AcceptedKeyboardReports>acceptedBefore && !decoder.FnDown && !failed && !cleaned && !ownership.LeaseEnded)
                     {
-                        if(outputMode!="events-only" || (eventPipe!=null && eventPipe.Connected))
+                        if(eventPipe!=null && eventPipe.Connected)
                         { ResetRelayAfterNeutral(); neutralReady=true; }
                     }
                     RecordEdges(sourceEdges, delivered, false);
@@ -525,7 +549,7 @@ internal static class GlobeEtwFnProbe
                 {
                     if(ownership.LeaseEnded) { stopRequested.Set(); break; }
                     if(stopRequested.WaitOne(FlushIntervalMilliseconds)) break;
-                    lock(gate) { CheckContinuity(); }
+                    lock(gate) { CheckContinuity();UpdateRouteAdmission(); }
                     FlushOnce();
                     PublishStatus(false);
                 }
@@ -711,6 +735,53 @@ internal static class GlobeEtwFnProbe
     }
 
     private static string Bool(bool value) { return value ? "true" : "false"; }
+    // Status selection keeps event-only consumer/neutral semantics independent
+    // of Deskflow observations, including unavailable or stale observations.
+    private static string CaptureState(string outputMode,bool failed,bool cleaned,bool consumerConnected,bool keyboardBound,
+        string reconnectState,bool neutral,bool hookHealthy,DeskflowRouteProbe.Snapshot route)
+    {
+        if(failed)return "Error";
+        if(cleaned)return "Stopped";
+        if(outputMode=="events-only" && !consumerConnected)return "AwaitConsumer";
+        if(!keyboardBound)return reconnectState;
+        if(outputMode=="events-only")return neutral?"EventsReady":"AwaitNeutral";
+        if(!hookHealthy || route==null || !route.CanStartPress)
+            return route!=null && route.Fresh && route.ServerPresent && route.CoreWindowResponsive && !route.RemoteSelected?
+                "PausedOnHost":"WaitingForDeskflow";
+        return neutral?"Ready":"AwaitRouteNeutral";
+    }
+
+    private static string[] RunCaptureStateTests(out int count)
+    {
+        int cases=0;var failures=new List<string>();
+        Action<bool,string> check=delegate(bool okay,string text){cases++;if(!okay)failures.Add(text);};
+        var selected=new DeskflowRouteProbe.Snapshot(true,new DeskflowRouteProbe.Sample(
+            new DeskflowRouteProbe.Observation(true,true,true,1,10,new IntPtr(20),DeskflowRouteProbe.RouteReason.Available),1,100,1),0,
+            DeskflowRouteProbe.StageKind.Waiting,DeskflowRouteProbe.RouteReason.Available);
+        var host=new DeskflowRouteProbe.Snapshot(true,new DeskflowRouteProbe.Sample(
+            new DeskflowRouteProbe.Observation(true,true,false,1,10,new IntPtr(20),DeskflowRouteProbe.RouteReason.NoRemoteWindow),2,100,1),0,
+            DeskflowRouteProbe.StageKind.Waiting,DeskflowRouteProbe.RouteReason.NoRemoteWindow);
+        foreach(var route in new[]{null,selected,host,DeskflowRouteProbe.NotStarted()})
+        {
+            check(CaptureState("events-only",false,false,false,true,"WaitingForKeyboard",true,true,route)=="AwaitConsumer",
+                "Event-only status waits for its single consumer regardless of Deskflow state");
+            check(CaptureState("events-only",false,false,true,false,"WaitingForIdentification",true,false,route)=="WaitingForIdentification",
+                "Event-only status retains keyboard identification before readiness");
+            check(CaptureState("events-only",false,false,true,true,null,false,true,route)=="AwaitNeutral",
+                "Event-only status requires its existing neutral baseline");
+            check(CaptureState("events-only",false,false,true,true,null,true,false,route)=="EventsReady",
+                "Event-only readiness does not require a Deskflow hook or route");
+        }
+        check(CaptureState("deskflow",false,false,false,true,null,true,true,selected)=="Ready","Fresh selected Deskflow route and neutral enable readiness");
+        check(CaptureState("deskflow",false,false,false,true,null,false,true,selected)=="AwaitRouteNeutral","Route return while non-neutral cannot report ready");
+        check(CaptureState("deskflow",false,false,false,true,null,true,true,host)=="PausedOnHost","Verified host selection reports a reversible pause");
+        check(CaptureState("deskflow",false,false,false,true,null,true,true,null)=="WaitingForDeskflow","Missing route observation cannot report ready");
+        check(CaptureState("deskflow",false,false,false,true,null,true,false,selected)=="WaitingForDeskflow","A selected route cannot hide an unavailable output hook");
+        check(CaptureState("events-only",true,false,false,true,null,true,true,selected)=="Error" &&
+            CaptureState("deskflow",false,true,false,true,null,true,true,selected)=="Stopped","Terminal status takes precedence over routing/consumer state");
+        count=cases;return failures.ToArray();
+    }
+
     private static bool SourceEpochChanged(bool wasBound,bool nowBound,long before,long after)
     { return (wasBound && !nowBound) || before!=after; }
     private static string Json(string value)
@@ -875,7 +946,11 @@ internal static class GlobeEtwFnProbe
             if(!SourceEpochChanged(true,true,1,2) || !SourceEpochChanged(true,false,1,1) ||
                 !SourceEpochChanged(false,true,0,1) || SourceEpochChanged(true,true,2,2))
                 failures.Add("Every HID channel epoch change requires a new physical neutral report, including an empty-edge rebound.");
-            int latencyTests=0, relayTests=0, headerTests=0, consoleTests=0, outputTests=0, continuityTests=0, reconnectTests=0, linkTests=0, eventPipeTests=0;
+            int latencyTests=0, relayTests=0, headerTests=0, consoleTests=0, outputTests=0, continuityTests=0, reconnectTests=0, linkTests=0, eventPipeTests=0, routeTests=0, captureStateTests=0;
+            try { failures.AddRange(DeskflowRouteProbe.RunSelfTests(out routeTests)); }
+            catch(Exception error) { failures.Add("Route probe synthetic tests: "+error.Message); }
+            try { failures.AddRange(RunCaptureStateTests(out captureStateTests)); }
+            catch(Exception error) { failures.Add("Capture status mode-boundary tests: "+error.Message); }
             try { failures.AddRange(FnEventPipe.RunSelfTests(out eventPipeTests)); }
             catch(Exception error) { failures.Add("Fixed Fn event pipe pure tests: "+error.Message); }
             try { failures.AddRange(ReconnectGuide.RunSelfTests(out reconnectTests)); failures.AddRange(KeyboardConnectionState.RunSelfTests(out linkTests)); }
@@ -927,6 +1002,7 @@ internal static class GlobeEtwFnProbe
             json.Append(",\"headerTestCount\":").Append(headerTests).Append(",\"ownedOutputTestCount\":").Append(outputTests).Append(",\"consoleTestCount\":").Append(consoleTests);
             json.Append(",\"continuityTestCount\":").Append(continuityTests);
             json.Append(",\"eventPipeTestCount\":").Append(eventPipeTests);
+            json.Append(",\"routeProbeTestCount\":").Append(routeTests).Append(",\"captureStateTestCount\":").Append(captureStateTests);
             json.Append(",\"reconnectGuideTestCount\":").Append(reconnectTests).Append(",\"linkStateTestCount\":").Append(linkTests);
             json.Append(",\"lowLatencyTestCount\":").Append(latencyTests).Append(",\"relayTestCount\":").Append(relayTests).Append(",\"nativeFlushCalls\":0,\"nativeInputCalls\":0");
             json.Append(",\"errors\":[");

@@ -128,13 +128,16 @@ if($buildRuntime) {
     Initialize-BuildDirectory $packageRoot
     & (Join-Path $repoRoot 'tests\Test-SetupValidation.ps1')
     $shared=@(Source-Paths @('DailyPaths.cs','NativeSearchPolicy.cs'))
-    $capture=@(Source-Paths @('DailyCapture.cs','FnEventPipe.cs','GlobeShortcutRelay.cs','OwnedMouseOutput.cs','DeskflowRouteGate.cs','BridgeOwnership.cs','GlobePacketDecoder.cs','GlobePacketDecoderTests.cs','BoundedConsoleWriter.cs','ConnectionHeaderDiagnostics.cs','CaptureContinuity.cs','KeyboardLinkState.cs','ReconnectGuide.cs'))
-    $guard=@(Source-Paths @('DailyGuard.cs','BluetoothLoggingRefresh.cs','GlobeShortcutRelay.cs','OwnedMouseOutput.cs','DeskflowRouteGate.cs','BoundedConsoleWriter.cs','OwnedBootRecovery.cs'))
-    $tray=@(Source-Paths @('InputLift.cs'))
+    $capture=@(Source-Paths @('DailyCapture.cs','FnEventPipe.cs','GlobeShortcutRelay.cs','OwnedMouseOutput.cs','DeskflowRouteGate.cs','DeskflowRouteProbe.cs','BridgeOwnership.cs','GlobePacketDecoder.cs','GlobePacketDecoderTests.cs','BoundedConsoleWriter.cs','ConnectionHeaderDiagnostics.cs','CaptureContinuity.cs','KeyboardLinkState.cs','ReconnectGuide.cs'))
+    $guard=@(Source-Paths @('DailyGuard.cs','BluetoothLoggingRefresh.cs','GlobeShortcutRelay.cs','OwnedMouseOutput.cs','DeskflowRouteGate.cs','DeskflowRouteProbe.cs','BoundedConsoleWriter.cs','OwnedBootRecovery.cs'))
+    $tray=@(Source-Paths @('InputLift.cs','CaptureRecoveryPolicy.cs','DeskflowRouteProbe.cs'))
     Build-Target $packageRoot 'InputLiftCapture.exe' 'exe' 'x64' ($capture+$shared) @('System.Web.Extensions.dll','System.Management.dll')
     Build-Target $packageRoot 'InputLiftGuard.exe' 'exe' 'x64' ($guard+$shared) @('System.Web.Extensions.dll','System.Management.dll')
     Build-Target $packageRoot 'InputLift.exe' 'winexe' 'x64' ($tray+$shared) @('System.Web.Extensions.dll','System.Windows.Forms.dll','System.Drawing.dll','Microsoft.CSharp.dll','System.Xml.dll')
     foreach($name in @('InputLiftCapture.exe','InputLiftGuard.exe','InputLift.exe')) { $adapterReports+=Run-PureTests $packageRoot $name }
+    $recoveryReport=(& (Join-Path $repoRoot 'tests\recovery\Test-Recovery.ps1')) | ConvertFrom-Json -ErrorAction Stop
+    if($recoveryReport.status -ne 'ok' -or @($recoveryReport.errors).Count -ne 0) { throw 'Recovery policy/JSON boundary tests did not report success.' }
+    $adapterReports+=[pscustomobject]@{Executable='InputLift.RecoveryTests.exe';Report=$recoveryReport}
     foreach($name in @('InputLift.exe','InputLiftGuard.exe','InputLiftCapture.exe')) {
         $payload+=[ordered]@{Name=$name;Sha256=(Get-FileHash -LiteralPath (Join-Path $packageRoot $name) -Algorithm SHA256).Hash}
     }

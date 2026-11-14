@@ -4,7 +4,7 @@
 // pass through unchanged. No keyboard hook, text/position capture, files or I/O.
 // The next routing hook observes owned button events before our nonzero return
 // blocks local window delivery. The fixed integration gate lives separately in
-// DeskflowRouteGate; this class retains hook health and release safeguards.
+// DeskflowRouteProbe; this class retains hook health and release safeguards.
 // Windows can silently remove timed-out low-level hooks;
 // refresh plus swallowed one-pixel health acknowledgement reduces, not
 // eliminates, races. Windows may omit zero-move hook callbacks and truncate
@@ -95,6 +95,8 @@ internal sealed class OwnedMouseOutput : IDisposable
     private static extern uint SendInput(uint count, [In] Input[] input, int size);
     [DllImport("kernel32.dll", ExactSpelling = true)] private static extern void SetLastError(uint error);
     private readonly object sendGate = new object();
+    private readonly object routeGate = new object();
+    private DeskflowRouteProbe routeProbe;
     private readonly ManualResetEvent ready = new ManualResetEvent(false), refreshed = new ManualResetEvent(false);
     private readonly ManualResetEvent healthAck = new ManualResetEvent(false), mouseAck = new ManualResetEvent(false), stopped = new ManualResetEvent(false);
     private readonly HookProcedure callback;
@@ -290,7 +292,11 @@ internal sealed class OwnedMouseOutput : IDisposable
         lock(sendGate)
         {
             if(disposed || Thread.CurrentThread==hookThread) return new SendResult(0,NotReady,false,"OwnedMouseOutputUnavailable");
-            SendResult result=SendCore(down,delegate { return CanStartPress; },RefreshAndVerify,
+            RouteAdmissionLease lease=new RouteAdmissionLease();
+            SendResult result=SendCore(down,delegate {
+                var route=RouteSnapshot;
+                return lease.Allows(HookHealthy&&route.CanStartPress,route.Epoch);
+            },RefreshAndVerify,
                 delegate(bool pressed) {
                     mouseAck.Reset(); Interlocked.Exchange(ref pendingMessage,unchecked((int)(pressed?Mouse5Down:Mouse5Up)));
                     SendResult sent=NativeInput(pressed,false);
@@ -308,11 +314,19 @@ internal sealed class OwnedMouseOutput : IDisposable
         }
     }
     internal bool CanStartPress
+    { get { return HookHealthy&&RouteSnapshot.CanStartPress; } }
+    internal bool HookHealthy
+    { get { return !disposed&&hookThread.IsAlive&&Interlocked.CompareExchange(ref threadFailure,0,0)==0&&Interlocked.CompareExchange(ref callbackFailure,0,0)==0; } }
+    internal DeskflowRouteProbe.Snapshot RouteSnapshot
     {
         get
         {
-            if(disposed || !hookThread.IsAlive || Interlocked.CompareExchange(ref threadFailure,0,0)!=0 || Interlocked.CompareExchange(ref callbackFailure,0,0)!=0) return false;
-            return DeskflowRouteGate.CanStartPress;
+            // UP-only emergency cleanup never reads this property, so it does
+            // not start a discovery worker. At most one worker per output owner.
+            DeskflowRouteProbe current=Interlocked.CompareExchange(ref routeProbe,null,null);
+            if(current==null&&!disposed)lock(routeGate)
+            { if(routeProbe==null&&!disposed)Interlocked.Exchange(ref routeProbe,DeskflowRouteProbe.Start());current=routeProbe; }
+            return current==null?DeskflowRouteProbe.NotStarted():current.Read();
         }
     }
     public void Dispose()
@@ -321,6 +335,9 @@ internal sealed class OwnedMouseOutput : IDisposable
         {
             if(disposed) return;
             disposed=true;
+            DeskflowRouteProbe probe;
+            lock(routeGate) { probe=routeProbe; }
+            if(probe!=null)probe.Dispose();
             Stopwatch stopTime=Stopwatch.StartNew();
             if(threadId!=0 && !stopped.WaitOne(0))
             {
@@ -396,6 +413,35 @@ internal sealed class OwnedMouseOutput : IDisposable
         sent=0;
         result=SendCore(true,delegate{return true;},prep,sender,acknowledge);
         check(result.Inserted==1 && result.Error==0 && result.Acknowledged && sent==1,"Healthy gated DOWN is sent once and acknowledged");
+        var lease=new RouteAdmissionLease();long routeEpoch=10;
+        result=SendCore(true,delegate{return lease.Allows(true,routeEpoch);},delegate { routeEpoch++;return new Preparation(true,0,"ready"); },
+            delegate(bool pressed){throw new Exception("A changed admission epoch must send no DOWN.");},acknowledge);
+        check(result.Stage=="DeskflowDeskChangedBeforeDown" && !result.MouseButtonAttempted,"A route epoch change during hook preparation refuses DOWN without replay");
+        bool fresh=true;lease=new RouteAdmissionLease();
+        result=SendCore(true,delegate{return lease.Allows(fresh,20);},delegate { fresh=false;return new Preparation(true,0,"ready"); },
+            delegate(bool pressed){throw new Exception("An expired observation must send no DOWN.");},acknowledge);
+        check(result.Stage=="DeskflowDeskChangedBeforeDown" && !result.MouseButtonAttempted,"A route snapshot that expires during hook preparation refuses DOWN");
+        var policy=new RelayRoutePolicy();int outputsDown=0,outputsUp=0,journalClears=0;bool journal=false;
+        GlobeShortcutRelay.BatchSender relaySender=delegate(GlobeShortcutRelay.Stroke[] strokes) {
+            if(strokes[0]==GlobeShortcutRelay.Stroke.Mouse5Down)outputsDown++;else outputsUp++;
+            return new GlobeShortcutRelay.SendResult(1,0);
+        };
+        Action<bool> persist=delegate(bool armed){journal=armed;if(!armed)journalClears++;};
+        var relay=new GlobeShortcutRelay(delegate{return false;},relaySender,persist);relay.InitializeJournal();
+        policy.ObservePhysical(false);policy.ObserveRoute(true,1,false);
+        check(policy.CanArm(true,false),"A trusted neutral report arms on the selected route");
+        policy.ObservePhysical(true);relay.OnGlobeDown();
+        if(policy.ObserveRoute(false,2,true))relay.Abort("test-route-loss");
+        int clearedAtLoss=journalClears;
+        if(policy.ObserveRoute(false,2,false))relay.Abort("test-repeated-loss");
+        check(outputsDown==1&&outputsUp==1&&!journal&&!relay.JournalArmed&&!relay.ChordMayBeDown&&journalClears==clearedAtLoss,
+            "Disconnect while held releases owned Mouse5 once and clears its durable journal once");
+        policy.ObserveRoute(true,3,false);
+        check(!policy.CanArm(true,true)&&outputsDown==1,"Held Fn on route return cannot rearm or replay a press");
+        policy.ObservePhysical(false);
+        if(policy.CanArm(true,false)) { relay=new GlobeShortcutRelay(delegate{return false;},relaySender,persist);relay.InitializeJournal(); }
+        policy.ObservePhysical(true);relay.OnGlobeDown();policy.ObservePhysical(false);relay.OnGlobeUp();
+        check(outputsDown==2&&outputsUp==2&&!journal,"A later real neutral and fresh physical press recover without keyboard reidentification");
         count=cases; return errors.ToArray();
     }
 }

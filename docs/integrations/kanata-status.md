@@ -14,7 +14,7 @@ deployment and physical-source testing.
 | Stage | Result and scope |
 |---|---|
 | Launcher | 111 pure metadata/policy checks pass locally, including the JSON timestamp boundary; no entrypoint or protected-state read. A fresh hosted run is required. |
-| Consumer lifecycle | 28 pure checks and eight owned-stub/process checks pass, including intentional stop while held and release through the worker's existing connection. |
+| Consumer lifecycle | 28 pure checks pass locally. Eight owned-stub/process checks passed in the historical hosted revision, including intentional stop while held; see the current local limitation below. |
 | Native pipe | Five cases passed in [hosted run 43625183677](https://github.com/ssaillant/inputlift/actions/runs/43625183677) at [`02543d4`](https://github.com/ssaillant/inputlift/commit/02543d493fff80cf21e5f42d45c35f83a7e87a4e): selected-user read, denied write, ordered frames/reset, disconnect/slow-reader handling, and bounded disposal. |
 | Native fixture boundary | Exact production pipe source with a test-only reader-identity shim; two CI accounts. It does not prove production's same-account elevation, installed image/metadata or remote SMB behavior. |
 | Native direction correction | Outbound access now uses the Windows-defined value `2`; alpha.1 used inbound `1` and must not be used for a physical event-only installation. |
@@ -28,6 +28,13 @@ The fixture deliberately separates duplicate-instance rejection from
 isolated first-instance-flag behavior: Windows returned `ERROR_PIPE_BUSY` (231)
 under the production one-instance limit, with the original producer healthy.
 The flag policy is source-checked; its isolated kernel cause is not claimed.
+
+The later local Deskflow-recovery-port validation attempted all eight transport
+checks. Windows denied loopback socket access with `An attempt was made to
+access a socket in a way forbidden by its access permissions`; dependent cases
+timed out. That attempt is not a transport pass or proof of a regression. No
+real application, capture or native input was involved. The new source requires
+a fresh successful hosted transport run before publication.
 
 ## Alpha.1 baseline evidence (historical)
 
