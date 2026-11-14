@@ -1,8 +1,9 @@
 # Kanata proposal: optional recovered-control companion
 
-Draft for technical review. This file is not evidence of an upstream discussion
-or acceptance. Update the validation paragraph and links from observed results
-before submitting it.
+Design notes supporting [Kanata Ideas #2247](https://github.com/jtroo/kanata/discussions/2247).
+The posted proposal links fixed evidence and a tester request. No maintainer
+acceptance or independent validation is implied. The [validation record](kanata-status.md)
+tracks observed results and outstanding stages.
 
 ## Problem and scope
 

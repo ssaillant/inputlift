@@ -23,7 +23,10 @@ The first device decoder handles a narrow Bluetooth Fn profile. The event model 
 | Kanata companion | Experimental loopback virtual-key adapter and event-only capture path; independent/live validation pending. |
 | Other device profiles, KVMs or native output backends | Extension work; not implemented or claimed as supported. |
 
-**Source-only alpha.** The generalized Windows runtime's installation/live behavior remain unvalidated. There are no published binaries or claims of universal device support.
+**Source-only alpha.** See [release notes](CHANGELOG.md) and the
+[Kanata proposal/test status](docs/integrations/kanata-status.md).
+The generalized Windows runtime's installation/live behavior remain unvalidated.
+There are no published binaries or claims of universal device support.
 
 ## Build and explore
 
