@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Record alpha.2 publication and current hosted software checks in the validation
+  guides, preserving the outstanding deployment and independent testing limits.
+
 ## 0.1.0-alpha.2
 
 - Add optional bounded countdown and hold timings for the synthetic Kanata demo,
@@ -37,9 +40,11 @@
   [hosted CI](https://github.com/ssaillant/inputlift/actions/runs/43625183677).
   These use a test-only reader-identity shim, not a production installation.
 
-The hosted result at `02543d4` predates the UTC timestamp fix. The updated
-111-check launcher suite passes locally; the current candidate needs a fresh
-hosted run.
+The hosted result at `02543d4` predates the UTC timestamp fix. The published
+alpha.2 source at `7e8b54b` subsequently passed
+[main CI](https://github.com/ssaillant/inputlift/actions/runs/43691300895) and
+[release-tag CI](https://github.com/ssaillant/inputlift/actions/runs/43691523576),
+including the updated 111-check launcher suite.
 
 The installed event-only and physical Bluetooth path still needs validation.
 There is no independent tester or upstream acceptance claim.

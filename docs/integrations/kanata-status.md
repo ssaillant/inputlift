@@ -1,32 +1,35 @@
-# Kanata candidate validation record
+# Kanata validation record
 
-This record separates observed results from release gates. It is not a hardware
-compatibility certificate. The `0.1.0-alpha.2` source is prepared for publication;
-GitHub's release page is the authority for publication state. A version in this
-file alone is not a published release.
+[InputLift v0.1.0-alpha.2](https://github.com/ssaillant/inputlift/releases/tag/v0.1.0-alpha.2)
+is published as an experimental source-only prerelease from
+[`7e8b54b`](https://github.com/ssaillant/inputlift/commit/7e8b54b7564cb3066fd1e7a55dba8550b89debee),
+with no executable assets. This record separates software evidence from installed
+deployment, physical Bluetooth behavior and independent manual validation.
 
-The `0.1.0-alpha.2` candidate adds a protected-state launcher, graceful stop,
-and hosted-only native pipe fixtures. These gates are distinct from installed
-deployment and physical-source testing.
+The release adds a protected-state launcher, graceful stop and hosted-only native
+pipe fixtures. Its [main CI](https://github.com/ssaillant/inputlift/actions/runs/43691300895)
+and [tag CI](https://github.com/ssaillant/inputlift/actions/runs/43691523576) passed
+all seven required validation steps at that source revision. Installed deployment
+and independent physical-source testing remain unvalidated.
 
 ## Alpha.2 observed evidence
 
 | Stage | Result and scope |
 |---|---|
-| Launcher | 111 pure metadata/policy checks pass locally, including the JSON timestamp boundary; no entrypoint or protected-state read. A fresh hosted run is required. |
-| Consumer lifecycle | 73 pure checks and all eleven owned-stub/process checks pass locally. The expanded suite includes timed-demo success and graceful stop during countdown and hold through the actual supervised worker. The earlier eight-case result remains historical. |
+| Launcher | 111 pure metadata/policy checks pass locally and in the current hosted runs, including the JSON timestamp boundary; no entrypoint or protected-state read. |
+| Consumer lifecycle | 73 pure checks and all eleven owned-stub/process checks pass locally and in the current hosted runs. The expanded suite includes timed-demo success and graceful stop during countdown and hold through the actual supervised worker. The earlier eight-case result remains historical. |
 | Manual demo timing | Optional 0–10000 ms countdown and 100–10000 ms hold; defaults remain 0/1000 ms. Fake-clock and owned-stub checks pass. Actual blank-editor mapping and independent testing remain unvalidated for this timed path. |
-| Native pipe | Five cases passed in [hosted run 43625183677](https://github.com/ssaillant/inputlift/actions/runs/43625183677) at [`02543d4`](https://github.com/ssaillant/inputlift/commit/02543d493fff80cf21e5f42d45c35f83a7e87a4e): selected-user read, denied write, ordered frames/reset, disconnect/slow-reader handling, and bounded disposal. |
+| Native pipe | Five cases passed in the current hosted runs: selected-user read/ordered frames/reset, denied write, idle disposal, rejection of an unarmed press, and blocked-reader teardown. The account harness executes the fixture after its separate compile step. |
 | Native fixture boundary | Exact production pipe source with a test-only reader-identity shim; two CI accounts. It does not prove production's same-account elevation, installed image/metadata or remote SMB behavior. |
 | Native direction correction | Outbound access now uses the Windows-defined value `2`; alpha.1 used inbound `1` and must not be used for a physical event-only installation. |
 | Installed and physical path | Still unvalidated. No Bluetooth capture or native input is part of the hosted fixture. |
 | Independent tester/maintainer feedback | Recruitment/proposal remain open; no external validation or acceptance claimed. |
 
-The successful hosted result covers the strict coordinator assertions in that
-revision, before the UTC timestamp fix. The updated 111-check launcher suite has
-local validation only; the current candidate needs a fresh hosted run.
-The updated consumer's 73-check pure suite and eleven-case process suite have
-local validation only; neither updates the earlier real-Kanata baseline.
+The earlier [hosted run 43625183677](https://github.com/ssaillant/inputlift/actions/runs/43625183677)
+at [`02543d4`](https://github.com/ssaillant/inputlift/commit/02543d493fff80cf21e5f42d45c35f83a7e87a4e)
+predates the UTC timestamp fix. The current main/tag runs cover the updated
+launcher, consumer and native fixture. These software results leave the earlier
+real-Kanata baseline unchanged.
 The three added process cases verify timed-demo success, countdown cancellation
 without a press, and hold cancellation with release on the worker's original
 connection before its scheduled up. The final rebuilt executable passed all
@@ -36,7 +39,7 @@ An initial run in a restricted execution context was denied loopback socket
 access with the same Windows access-permission error below; dependent cases
 timed out. Rechecking in an authorized execution context passed without changing
 Windows network settings. That denial was an execution boundary, not a code
-failure. A fresh hosted run is still required for this revision.
+failure. The current hosted runs also pass these software fixtures.
 The fixture deliberately separates duplicate-instance rejection from
 isolated first-instance-flag behavior: Windows returned `ERROR_PIPE_BUSY` (231)
 under the production one-instance limit, with the original producer healthy.
@@ -47,8 +50,8 @@ restricted execution networking. Windows denied loopback socket access with `An 
 access a socket in a way forbidden by its access permissions`; dependent cases
 timed out. After execution-network permission was granted, all eight owned
 loopback checks passed without changing source or Windows network settings.
-No real application, capture or native input was involved. The new source still
-requires a fresh successful hosted run before publication.
+No real application, capture or native input was involved. That historical result
+is separate from the current eleven-case local and hosted results above.
 
 ## Alpha.1 baseline evidence (historical)
 

@@ -95,7 +95,10 @@ cleanup. They make no registry, child-process, native-input or trace calls.
 The local suite passes 581 recovery checks (358 policy checks across 21 scenarios,
 214 production JSON cases and nine completed-guard boundary cases), plus 29 synthetic probe/admission and
 22 capture-status mode checks. Counts are software checks, not devices or live
-disconnect tests. A fresh hosted run is still required for this source revision.
+disconnect tests. These checks also passed for the published alpha.2 source
+[`7e8b54b`](https://github.com/ssaillant/inputlift/commit/7e8b54b7564cb3066fd1e7a55dba8550b89debee)
+in [main CI](https://github.com/ssaillant/inputlift/actions/runs/43691300895)
+and [release-tag CI](https://github.com/ssaillant/inputlift/actions/runs/43691523576).
 
 These checks establish software behavior, not a complete public-runtime
 deployment or independent hardware validation. See [validation](../validation.md)

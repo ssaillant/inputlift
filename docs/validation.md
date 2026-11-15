@@ -1,6 +1,6 @@
 # Validation and build details
 
-InputLift is prepared as a **source-only alpha**. The default library/examples are separate from the experimental privileged Windows integration. No hosted CI result, generalized live-runtime validation or formal security audit is implied by a successful local build.
+InputLift [v0.1.0-alpha.2](https://github.com/ssaillant/inputlift/releases/tag/v0.1.0-alpha.2) is published as an **experimental source-only prerelease**, with no executable assets. The default library/examples are separate from the experimental privileged Windows integration. A successful local build alone establishes no hosted CI result, generalized live-runtime validation or formal security audit.
 
 ## Build toolchain
 
@@ -33,7 +33,8 @@ boundary cases against production code. These read no installed state and start 
 pipe, Bluetooth capture or native input. See [recovery limits](integrations/deskflow-recovery.md).
 The Kanata build runs 73 pure checks, including fake-clock manual-demo timing,
 authenticated handoff and cancellation/release. All eleven explicit transport
-checks pass locally against an owned loopback stub, including supervised failure
+checks pass locally and in the current hosted runs against an owned loopback stub,
+including supervised failure
 paths and three new timed-demo cases: normal completion, countdown cancellation
 without a press, and held cancellation with original-connection release before
 the scheduled up. An initial restricted-context loopback denial was resolved by
@@ -45,7 +46,8 @@ scenarios through the public decoder and event adapter.
 The normal-user bridge launcher's 111 pure metadata/policy checks are also part
 of the optional build. They extract validation functions without invoking the
 entrypoint, reading protected state, connecting to a source, or starting a process.
-The expanded suite passes locally and covers the actual JSON timestamp boundary,
+The expanded suite passes locally and in the current hosted runs, covering the
+actual JSON timestamp boundary,
 including UTC `DateTime` values, strict UTC-kind checks and freshness limits.
 Actual installed metadata/native authentication still needs deployment testing.
 
@@ -74,6 +76,15 @@ Compiler CS0649 warnings in JSON-deserialized runtime state classes are expected
 
 ## CI and limits
 
+For the published alpha.2 source at
+[`7e8b54b`](https://github.com/ssaillant/inputlift/commit/7e8b54b7564cb3066fd1e7a55dba8550b89debee),
+[main CI](https://github.com/ssaillant/inputlift/actions/runs/43691300895) and
+[tag CI](https://github.com/ssaillant/inputlift/actions/runs/43691523576) passed all
+seven required validation steps. This includes the current build/pure suites,
+synthetic packet evidence, eleven owned-stub/process checks, five executed native
+pipe cases and failed-build regression. Installed deployment, physical Bluetooth
+behavior and independent manual validation remain separate, outstanding stages.
+
 The GitHub workflow targets the Windows Server 2025 runner generation, uses a verified full checkout commit SHA, a read-only token and no persisted checkout credentials. It runs the same pure build/test modes and the failed-build regression. Runner-image updates still occur within that generation. Dependabot is configured to propose monthly action updates; updates are not automatically merged.
 
 Hosted Windows jobs start with an administrator token. The explicitly separate
@@ -91,20 +102,18 @@ but differs from production's same-account elevation and fixed installed image.
 Treat the per-case observed result as evidence; compiling the fixture is not a
 native test pass. Remote SMB rejection and physical hardware are not exercised.
 
-[Hosted run 43625183677](https://github.com/ssaillant/inputlift/actions/runs/43625183677)
+The historical [hosted run 43625183677](https://github.com/ssaillant/inputlift/actions/runs/43625183677)
 passed at [`02543d4`](https://github.com/ssaillant/inputlift/commit/02543d493fff80cf21e5f42d45c35f83a7e87a4e),
-before the UTC timestamp fix and expanded 111-check launcher suite. Those changes
-have local validation only and need a fresh hosted run; local success does not
-establish the updated candidate's CI result.
+before the UTC timestamp fix and expanded 111-check launcher suite. The current
+main/tag runs cover those changes as well as the newer Deskflow recovery port's
+build/policy/JSON checks.
 
-The newer Deskflow recovery port has local build/policy/JSON validation only;
-that historical hosted run does not cover it. The public package's fresh
-installation, reboot path and forced live timeout recovery remain unvalidated.
+The public package's fresh installation, reboot path and forced live timeout
+recovery remain unvalidated.
 The earlier eight-case transport attempt was blocked by Windows loopback socket
 access errors, with dependent cases timing out. After execution-network
 permission was granted, the unchanged source passed all eight owned-loopback
 checks locally. That historical result is separate from the current eleven-case
-local pass above. No real application or native input was involved. Fresh hosted
-transport evidence is still required for the source revision to be published.
+local and hosted results above. No real application or native input was involved.
 
 The renamed/generalized live capture package, a fresh privileged installation, reconnect behavior and additional device profiles remain unvalidated in this public version. Keep these limits in compatibility and release notes; do not publish stable end-user binaries on the strength of pure checks alone.
