@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Correct the architecture guide and workflow title to distinguish pure checks
+  from isolated process/native-pipe fixtures, retaining the production and hardware
+  validation limits.
 - Record alpha.2 publication and current hosted software checks in the validation
   guides, preserving the outstanding deployment and independent testing limits.
 

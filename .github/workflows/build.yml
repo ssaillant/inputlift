@@ -1,4 +1,4 @@
-name: Build and pure checks
+name: Build and software checks
 on:
   push:
   pull_request:

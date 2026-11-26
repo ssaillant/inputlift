@@ -51,4 +51,6 @@ commands, and other KVM adapters are not provided.
 
 The optional runtime installs to fixed administrator-protected Program Files/ProgramData paths and binds its account, selected device, task and executable hashes in protected metadata. One runtime installation per machine is supported. This is not a boundary against a hostile administrator.
 
-The generalized runtime installation and renamed executables have not been validated as a complete live deployment. Builds/CI compile the core and optional integration and run pure checks only. Passing them does not establish hardware support or prove native input delivery.
+The generalized runtime installation and renamed executables have not been validated as a complete live deployment. Builds compile the core and optional integrations and run pure checks. CI also runs isolated loopback/process checks and native Windows pipe fixtures in a disposable GitHub-hosted VM, using a temporary standard account for consumers and readers; see [validation](validation.md).
+
+These software checks do not validate a production installation, hardware support, automatic startup identification or native input delivery. The [startup and mode boundaries](integrations/deskflow-recovery.md#startup-and-mode-boundaries) still apply.
