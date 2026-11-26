@@ -18,7 +18,7 @@ internal sealed class FnEventPipe : IDisposable
     // PIPE_ACCESS_OUTBOUND=0x2; 0x1 is INBOUND and cannot feed a read-only client.
     private const uint OutboundOverlappedFirst = 2U | 0x40000000U | 0x00080000U;
     private const uint RejectRemoteClients = 8;
-    private const int MaximumQueuedEdges=64, WriteTimeoutMilliseconds=500;
+    private const int MaximumQueuedEdges=64, WriteTimeoutMilliseconds=500, CancellationDrainMilliseconds=500;
     [StructLayout(LayoutKind.Sequential)]
     private struct SecurityAttributes { internal int Length;internal IntPtr Descriptor;[MarshalAs(UnmanagedType.Bool)] internal bool Inherit; }
     [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true,ExactSpelling=true)]
@@ -41,7 +41,7 @@ internal sealed class FnEventPipe : IDisposable
     private string failure;
     private long sequence;
     private readonly EmissionOrder emissionOrder=new EmissionOrder();
-    private bool disposed;
+    private bool disposed,disposalCompleted,ioDrainIncomplete;
     internal string Name { get;private set; }
     internal bool Connected { get { return connected; } }
     internal string Failure { get { lock(gate) return failure; } }
@@ -96,8 +96,8 @@ internal sealed class FnEventPipe : IDisposable
             if(disposed || failure!=null || !connected)return;
             if(queued.Count>=MaximumQueuedEdges) { failure="Fixed Fn pipe queue overflow; input continuity was lost.";stopped.Set();return; }
             queued.Enqueue(new Edge { Kind=kind,Neutral=isNeutral });
+            changed.Set(); // Dispose cannot close this event before publication leaves the gate.
         }
-        changed.Set();
     }
     private void Send(string kind,bool isNeutral)
     {
@@ -105,12 +105,8 @@ internal sealed class FnEventPipe : IDisposable
         emissionOrder.Accept(kind,isNeutral);
         byte[] bytes=Encoding.ASCII.GetBytes(Frame(++sequence,kind,isNeutral));
         IAsyncResult pending=pipe.BeginWrite(bytes,0,bytes.Length,null,null);
-        using(WaitHandle completed=pending.AsyncWaitHandle)
-        {
-            int selected=WaitHandle.WaitAny(new WaitHandle[]{stopped,completed},WriteTimeoutMilliseconds);
-            if(selected!=1) { CancelIoEx(pipe.SafePipeHandle,IntPtr.Zero);throw new IOException("Fixed Fn pipe write stopped or exceeded 500 milliseconds."); }
-            pipe.EndWrite(pending);
-        }
+        if(!WaitAndEnd(pending,stopped,CancelPendingIo,pipe.EndWrite,WriteTimeoutMilliseconds,CancellationDrainMilliseconds))
+            throw new IOException("Fixed Fn pipe write stopped or exceeded 500 milliseconds.");
     }
     // This policy runs on the sole wire writer. A producer-side baseline is not
     // enough: neutral must occur in stream order before the first admitted down.
@@ -134,11 +130,7 @@ internal sealed class FnEventPipe : IDisposable
         try
         {
             IAsyncResult pending=pipe.BeginWaitForConnection(null,null);
-            using(WaitHandle completed=pending.AsyncWaitHandle)
-            {
-                if(WaitHandle.WaitAny(new WaitHandle[]{stopped,completed})!=1)return;
-                pipe.EndWaitForConnection(pending);
-            }
+            if(!WaitAndEnd(pending,stopped,CancelPendingIo,pipe.EndWaitForConnection,Timeout.Infinite,CancellationDrainMilliseconds))return;
             // A new reader never inherits an existing held state. Capture will
             // require a fresh neutral keyboard report before admitting a down.
             neutral=false;
@@ -156,23 +148,162 @@ internal sealed class FnEventPipe : IDisposable
         }
         catch(Exception error)
         {
-            if(!stopped.WaitOne(0))lock(gate) { failure=error.GetType().Name+": "+error.Message; }
+            lock(gate)
+            {
+                if(error is PendingIoNotDrainedException)ioDrainIncomplete=true;
+                if(ioDrainIncomplete || !stopped.WaitOne(0))failure=error.GetType().Name+": "+error.Message;
+            }
         }
         finally { connected=false;stopped.Set(); }
     }
+    private sealed class PendingIoNotDrainedException : IOException
+    {
+        internal PendingIoNotDrainedException(string message,Exception inner) : base(message+(inner==null?String.Empty:" "+inner.GetType().Name+": "+inner.Message),inner) { }
+    }
+    private void CancelPendingIo() { CancelIoEx(pipe.SafePipeHandle,IntPtr.Zero); }
+    // Framework End methods own the result's event. Its IsCompleted flag can be
+    // set BEFORE the IOCP callback signals that event, so it is not a drain proof.
+    // Never dispose AsyncWaitHandle ourselves, including on stop or timeout.
+    private static bool WaitAndEnd(IAsyncResult pending,WaitHandle stop,Action cancel,Action<IAsyncResult> end,int timeout,int drainTimeout)
+    {
+        WaitHandle completed=pending.AsyncWaitHandle;
+        int selected=WaitHandle.WaitAny(new WaitHandle[]{stop,completed},timeout);
+        if(selected!=1)
+        {
+            Exception cancellationError=null;
+            try { cancel(); } catch(Exception error) { cancellationError=error; }
+            bool drained;
+            try { drained=completed.WaitOne(drainTimeout); }
+            catch(Exception error) { throw new PendingIoNotDrainedException("Fixed Fn pipe cancellation completion could not be observed; process exit is required.",error); }
+            if(!drained)throw new PendingIoNotDrainedException("Fixed Fn pipe cancellation did not complete within its drain budget; process exit is required.",cancellationError);
+        }
+        try { end(pending); }
+        catch(IOException) { if(selected==1)throw; } // End released the completed result before surfacing cancellation.
+        catch(OperationCanceledException) { if(selected==1)throw; } // Framework maps ERROR_OPERATION_ABORTED to this type.
+        catch(Exception error) { throw new PendingIoNotDrainedException("Fixed Fn pipe completion cleanup failed; process exit is required.",error); }
+        return selected==1;
+    }
+    private static bool BeginDisposal(ref bool requested,bool completed)
+    {
+        if(completed)return false;
+        if(requested)throw new InvalidOperationException("Fixed Fn pipe cleanup is incomplete; process exit is required.");
+        requested=true;return true;
+    }
     public void Dispose()
     {
-        lock(gate) { if(disposed)return;disposed=true;neutral=false; }
-        stopped.Set();changed.Set();
-        CancelIoEx(pipe.SafePipeHandle,IntPtr.Zero);
-        pipe.Dispose();
+        lock(gate)
+        {
+            if(!BeginDisposal(ref disposed,disposalCompleted))return;
+            neutral=false;stopped.Set();changed.Set();
+        }
+        CancelPendingIo();
+        // Keep the stream open until End has drained the result. Closing it first
+        // can make Framework End fail before releasing its completion resources.
         if(!writer.Join(1500))throw new InvalidOperationException("Fixed Fn pipe writer did not stop; process exit is required.");
+        if(ioDrainIncomplete)throw new InvalidOperationException("Fixed Fn pipe I/O did not drain; process exit is required. "+Failure);
+        pipe.Dispose();
         changed.Dispose();stopped.Dispose();
+        lock(gate)disposalCompleted=true;
+    }
+    private sealed class SyntheticPending : IAsyncResult,IDisposable
+    {
+        internal readonly ManualResetEvent Signal=new ManualResetEvent(false);
+        internal bool EarlyComplete,Ended;
+        internal int EndCalls,CompletedReads;
+        public object AsyncState { get { return null; } }
+        public WaitHandle AsyncWaitHandle { get { return Signal; } }
+        public bool CompletedSynchronously { get { return false; } }
+        public bool IsCompleted { get { Interlocked.Increment(ref CompletedReads);return EarlyComplete; } }
+        internal void End(IAsyncResult result)
+        {
+            EndCalls++;
+            if(!Object.ReferenceEquals(this,result) || !Signal.WaitOne(0))throw new InvalidOperationException("Synthetic End preceded completion.");
+            Signal.Close();Ended=true;
+        }
+        public void Dispose() { Signal.Dispose(); }
     }
     internal static List<string> RunSelfTests(out int count)
     {
         var errors=new List<string>();int checks=0;
         Action<bool,string> check=delegate(bool ok,string text){checks++;if(!ok)errors.Add(text);};
+        using(ManualResetEvent stop=new ManualResetEvent(false))
+        using(SyntheticPending pending=new SyntheticPending())
+        {
+            pending.Signal.Set();int cancellations=0;
+            bool admitted=WaitAndEnd(pending,stop,delegate { cancellations++; },pending.End,0,0);
+            check(admitted && pending.EndCalls==1 && pending.Ended && cancellations==0,"Completed operations pair End exactly once without cancellation.");
+        }
+        using(ManualResetEvent stop=new ManualResetEvent(true))
+        using(ManualResetEvent cancelObserved=new ManualResetEvent(false))
+        using(SyntheticPending pending=new SyntheticPending())
+        {
+            // Match Framework's early IsCompleted=true, delayed event.Set window.
+            pending.EarlyComplete=true;Exception operationError=null;int cancellations=0;bool admitted=false;
+            Thread operation=new Thread(delegate()
+            {
+                try { admitted=WaitAndEnd(pending,stop,delegate { cancellations++;cancelObserved.Set(); },pending.End,Timeout.Infinite,3000); }
+                catch(Exception error) { operationError=error; }
+            }) { IsBackground=true };
+            operation.Start();
+            try
+            {
+                if(!cancelObserved.WaitOne(3000))throw new InvalidOperationException("Synthetic cancellation was not requested.");
+                check(!operation.Join(50) && pending.EndCalls==0,"An early completion flag cannot admit End or return while its event remains unsignaled.");
+            }
+            finally
+            {
+                pending.Signal.Set();
+                if(!operation.Join(3000))throw new InvalidOperationException("Synthetic completion did not finish.");
+            }
+            check(!admitted && pending.EndCalls==1 && pending.Ended && cancellations==1 && operationError==null && pending.CompletedReads==0,"Stop drains delayed signaling without polling IsCompleted or closing its live event.");
+        }
+        using(ManualResetEvent stop=new ManualResetEvent(false))
+        using(SyntheticPending pending=new SyntheticPending())
+        {
+            int cancellations=0;
+            bool admitted=WaitAndEnd(pending,stop,delegate { cancellations++;pending.Signal.Set(); },pending.End,0,1000);
+            check(!admitted && cancellations==1 && pending.EndCalls==1,"Write timeout cancels after Begin, drains and pairs End exactly once.");
+        }
+        using(ManualResetEvent stop=new ManualResetEvent(true))
+        using(SyntheticPending pending=new SyntheticPending())
+        {
+            bool refused=false;try { WaitAndEnd(pending,stop,delegate { },pending.End,0,0); }
+            catch(PendingIoNotDrainedException) { refused=true; }
+            check(refused && pending.EndCalls==0,"Incomplete cancellation refuses End and cleanup proof.");
+            pending.Signal.Set(); // A late completion must still be able to signal.
+            check(pending.Signal.WaitOne(0),"Failed drain leaves the pending completion event alive.");
+            pending.End(pending);
+        }
+        using(ManualResetEvent stop=new ManualResetEvent(true))
+        using(SyntheticPending pending=new SyntheticPending())
+        {
+            int endCalls=0;
+            bool admitted=WaitAndEnd(pending,stop,delegate { pending.Signal.Set(); },delegate(IAsyncResult result)
+            { endCalls++;pending.Signal.Close();throw new IOException("Synthetic operation aborted after End cleanup."); },0,0);
+            check(!admitted && endCalls==1,"Expected cancellation is handled only after the completed End call.");
+        }
+        using(ManualResetEvent stop=new ManualResetEvent(true))
+        using(SyntheticPending pending=new SyntheticPending())
+        {
+            int endCalls=0;
+            bool admitted=WaitAndEnd(pending,stop,delegate { pending.Signal.Set(); },delegate(IAsyncResult result)
+            { endCalls++;pending.Signal.Close();throw new OperationCanceledException("Synthetic native operation aborted after End cleanup."); },0,0);
+            check(!admitted && endCalls==1,"Framework operation-aborted cancellation is clean only after the stopped operation's End call.");
+        }
+        using(ManualResetEvent stop=new ManualResetEvent(false))
+        using(SyntheticPending pending=new SyntheticPending())
+        {
+            pending.Signal.Set();int endCalls=0;bool surfaced=false;
+            try { WaitAndEnd(pending,stop,delegate { },delegate(IAsyncResult result)
+            { endCalls++;pending.Signal.Close();throw new OperationCanceledException("Synthetic unsolicited cancellation."); },0,0); }
+            catch(OperationCanceledException) { surfaced=true; }
+            check(surfaced && endCalls==1,"Unsolicited cancellation still surfaces after End; it is not classified as an undrained operation.");
+        }
+        bool disposalRequested=false;
+        check(BeginDisposal(ref disposalRequested,false),"First disposal owns cleanup.");
+        bool repeatedIncompleteRefused=false;try { BeginDisposal(ref disposalRequested,false); }catch(InvalidOperationException) { repeatedIncompleteRefused=true; }
+        check(repeatedIncompleteRefused,"A failed or unfinished first disposal cannot turn into successful repeated cleanup.");
+        check(!BeginDisposal(ref disposalRequested,true),"Completed disposal is idempotent.");
         check(PipeName("0123456789abcdef0123456789abcdef")=="InputLift.Fn.0123456789abcdef0123456789abcdef","Fixed non-personal pipe namespace.");
         check(Frame(1,"reset",false)=="ILFN1 1 reset 0\n","Reset starts unarmed.");
         check(Frame(2,"down",false)=="ILFN1 2 down 0\n","Down is not neutral.");

@@ -118,7 +118,8 @@ foreach($scenario in @('ordered','denied-write','idle-dispose','unarmed-down','b
             if(-not [string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $stderr -Raw))) { throw ('Native client stderr: '+(Get-Content -LiteralPath $stderr -Raw)) }
         }
         if(-not $server.HasExited) { $server.StandardInput.WriteLine('finish') }
-        if(-not $server.WaitForExit(5000)) { throw 'Owned native server did not stop after finish.' }
+        $stopTimeout=if($scenario -eq 'idle-dispose') { 75000 } else { 5000 }
+        if(-not $server.WaitForExit($stopTimeout)) { throw 'Owned native server did not stop after finish.' }
         if(-not $serverOut.Wait(1000) -or -not $serverErr.Wait(1000)) { throw 'Native server output did not drain.' }
         $serverReport=$serverOut.Result | ConvertFrom-Json
         if($server.ExitCode -ne 0 -or $null -eq $serverReport -or $serverReport.phase -cne 'result' -or
@@ -138,6 +139,7 @@ foreach($scenario in @('ordered','denied-write','idle-dispose','unarmed-down','b
         switch($scenario) {
             'ordered' { if(-not $clientReport.orderedFramesReachedActualConsumer -or -not $serverReport.disconnectedConsumerStopped) { throw 'Ordered native/consumer/disconnect proof missing.' } }
             'denied-write' { if(-not $clientReport.writeConnectionDenied -or $clientReport.selectedReaderConnected) { throw 'Native write-denial proof missing.' } }
+            'idle-dispose' { if($serverReport.pendingAcceptShutdowns -ne 32) { throw 'Pending-accept shutdown stress proof missing.' } }
             'unarmed-down' { if(-not $clientReport.unarmedDownRejected) { throw 'Native unarmed-down rejection proof missing.' } }
             'blocked-reader' { if(-not $serverReport.blockedReaderStopped) { throw 'Native blocked-reader stop proof missing.' } }
         }
