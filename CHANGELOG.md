@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Drain cancelled asynchronous pipe operations before closing their stream; keep
+  incomplete drains stopped for process-exit cleanup. Add synthetic completion-lifetime
+  checks and a hosted pending-accept shutdown stress regression.
 - Correct the architecture guide and workflow title to distinguish pure checks
   from isolated process/native-pipe fixtures, retaining the production and hardware
   validation limits.

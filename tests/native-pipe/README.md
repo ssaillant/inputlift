@@ -58,7 +58,7 @@ stop; no automatic retry.
 |---|---|---|
 | `ordered` | Read frames into the actual public capture-frame consumer with an in-memory output. | Kernel ACL, duplicate-producer rejection, selected-user read, initial reset/no preconnection replay, ordered neutral/down/up/reset, disconnect stop. |
 | `denied-write` | Attempt an outbound/write connection; must receive access denied. | Selected read-only principal cannot send data to the outbound producer. |
-| `idle-dispose` | Do not start a client; write `finish` after ready. | Cancellation and bounded disposal before a reader connects. |
+| `idle-dispose` | Do not start a client; write `finish` after ready. | Cancellation and bounded disposal before a reader connects, then 32 pending-accept shutdowns alternating immediate Stop and an observed waiting writer. Clean process exit and empty stderr remain required. |
 | `unarmed-down` | Read initial reset until server EOF. | Actual wire writer rejects a down before neutral and emits no press. |
 | `blocked-reader` | Connect and intentionally do not read for 6.5 seconds. | Actual buffer/write or bounded queue overload stops the producer, followed by bounded disposal. |
 

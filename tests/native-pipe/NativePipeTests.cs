@@ -232,11 +232,28 @@ internal static class NativePipeTests
         }
         if (options.Scenario == "unarmed-down" || options.Scenario == "blocked-reader") Finish();
         // Recreating after disposal proves that the owned named handle was closed.
-        using (FnEventPipe recreated = new FnEventPipe(options.Nonce)) { }
+        // Stress both immediate Stop and a known pending accept. Every instance
+        // must drain and join before this process can report clean shutdown.
+        int pendingAcceptShutdowns = options.Scenario == "idle-dispose" ? 32 : 1;
+        for (int i = 0; i < pendingAcceptShutdowns; i++)
+        {
+            using (FnEventPipe recreated = new FnEventPipe(options.Nonce))
+            {
+                if (options.Scenario == "idle-dispose" && i % 2 == 0)
+                {
+                    FieldInfo writerField = typeof(FnEventPipe).GetField("writer", BindingFlags.NonPublic | BindingFlags.Instance);
+                    Check(writerField != null, "Native fixture writer field missing.");
+                    Thread writer = (Thread)writerField.GetValue(recreated);
+                    WaitUntil(delegate { return (writer.ThreadState & System.Threading.ThreadState.WaitSleepJoin) != 0; },
+                        1000, "Idle writer did not enter its pending connection wait.");
+                }
+            }
+        }
         Console.WriteLine(Json.Serialize(new { phase = "result", status = "ok", scenario = options.Scenario,
             actualKernelAclVerified = true, duplicateInstanceDenied = true, duplicateInstanceErrorCode = duplicateErrorCode,
             firstInstanceFlagPolicyPresent = true, firstInstanceFlagBehaviorValidated = false, nativeHandleClosed = true,
             disposalBounded = disposalBounded, freshConnectionReset = noReplay, disconnectedConsumerStopped = disconnected,
+            pendingAcceptShutdowns = options.Scenario == "idle-dispose" ? pendingAcceptShutdowns : 0,
             blockedReaderStopped = timeoutStopped, bluetoothCaptureStarted = false, nativeInputSent = false,
             installedDeploymentValidated = false, productionOwnerBindingValidated = false, remoteSmbBehaviorValidated = false }));
         return 0;
