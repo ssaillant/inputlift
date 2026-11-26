@@ -158,7 +158,7 @@ internal sealed class FnEventPipe : IDisposable
     }
     private sealed class PendingIoNotDrainedException : IOException
     {
-        internal PendingIoNotDrainedException(string message,Exception inner) : base(message,inner) { }
+        internal PendingIoNotDrainedException(string message,Exception inner) : base(message+(inner==null?String.Empty:" "+inner.GetType().Name+": "+inner.Message),inner) { }
     }
     private void CancelPendingIo() { CancelIoEx(pipe.SafePipeHandle,IntPtr.Zero); }
     // Framework End methods own the result's event. Its IsCompleted flag can be
@@ -179,6 +179,7 @@ internal sealed class FnEventPipe : IDisposable
         }
         try { end(pending); }
         catch(IOException) { if(selected==1)throw; } // End released the completed result before surfacing cancellation.
+        catch(OperationCanceledException) { if(selected==1)throw; } // Framework maps ERROR_OPERATION_ABORTED to this type.
         catch(Exception error) { throw new PendingIoNotDrainedException("Fixed Fn pipe completion cleanup failed; process exit is required.",error); }
         return selected==1;
     }
@@ -199,7 +200,7 @@ internal sealed class FnEventPipe : IDisposable
         // Keep the stream open until End has drained the result. Closing it first
         // can make Framework End fail before releasing its completion resources.
         if(!writer.Join(1500))throw new InvalidOperationException("Fixed Fn pipe writer did not stop; process exit is required.");
-        if(ioDrainIncomplete)throw new InvalidOperationException("Fixed Fn pipe I/O did not drain; process exit is required.");
+        if(ioDrainIncomplete)throw new InvalidOperationException("Fixed Fn pipe I/O did not drain; process exit is required. "+Failure);
         pipe.Dispose();
         changed.Dispose();stopped.Dispose();
         lock(gate)disposalCompleted=true;
@@ -280,6 +281,23 @@ internal sealed class FnEventPipe : IDisposable
             bool admitted=WaitAndEnd(pending,stop,delegate { pending.Signal.Set(); },delegate(IAsyncResult result)
             { endCalls++;pending.Signal.Close();throw new IOException("Synthetic operation aborted after End cleanup."); },0,0);
             check(!admitted && endCalls==1,"Expected cancellation is handled only after the completed End call.");
+        }
+        using(ManualResetEvent stop=new ManualResetEvent(true))
+        using(SyntheticPending pending=new SyntheticPending())
+        {
+            int endCalls=0;
+            bool admitted=WaitAndEnd(pending,stop,delegate { pending.Signal.Set(); },delegate(IAsyncResult result)
+            { endCalls++;pending.Signal.Close();throw new OperationCanceledException("Synthetic native operation aborted after End cleanup."); },0,0);
+            check(!admitted && endCalls==1,"Framework operation-aborted cancellation is clean only after the stopped operation's End call.");
+        }
+        using(ManualResetEvent stop=new ManualResetEvent(false))
+        using(SyntheticPending pending=new SyntheticPending())
+        {
+            pending.Signal.Set();int endCalls=0;bool surfaced=false;
+            try { WaitAndEnd(pending,stop,delegate { },delegate(IAsyncResult result)
+            { endCalls++;pending.Signal.Close();throw new OperationCanceledException("Synthetic unsolicited cancellation."); },0,0); }
+            catch(OperationCanceledException) { surfaced=true; }
+            check(surfaced && endCalls==1,"Unsolicited cancellation still surfaces after End; it is not classified as an undrained operation.");
         }
         bool disposalRequested=false;
         check(BeginDisposal(ref disposalRequested,false),"First disposal owns cleanup.");
